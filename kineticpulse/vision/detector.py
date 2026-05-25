@@ -22,15 +22,21 @@ log = get_logger(__name__)
 
 
 class PostureClass(str, Enum):
-    """The 3-class unified schema produced by the merge script."""
+    """The 4-class unified schema produced by the merge script.
+
+    Index order matches ``UNIFIED_CLASSES`` in ``scripts/merge_datasets.py``.
+    Keep these in lockstep - if you reorder one you must reorder the other,
+    or every trained checkpoint will silently mis-label.
+    """
 
     FALLEN = "fallen"
     FALLING = "falling"
     STAND = "stand"
+    SITTING = "sitting"
 
     @classmethod
     def from_index(cls, idx: int) -> "PostureClass":
-        return [cls.FALLEN, cls.FALLING, cls.STAND][idx]
+        return [cls.FALLEN, cls.FALLING, cls.STAND, cls.SITTING][idx]
 
 
 @dataclass

@@ -96,6 +96,13 @@ def main() -> int:
         print(f"[error] weights not found: {args.weights}", file=sys.stderr)
         return 2
 
+    # Resolve --project to an absolute path so Ultralytics does not nest it
+    # under the current working directory a second time (which produced the
+    # confusing `runs/detect/runs/detect/eval_*` layout in earlier runs).
+    project_path = Path(args.project)
+    if not project_path.is_absolute():
+        project_path = (REPO_ROOT / project_path).resolve()
+
     eval_name = args.name or f"eval_{args.split}"
     print("=" * 64)
     print("KineticPulse - evaluation")
@@ -123,7 +130,7 @@ def main() -> int:
         device=args.device,
         conf=args.conf,
         iou=args.iou,
-        project=args.project,
+        project=str(project_path),
         name=eval_name,
         plots=True,
         save_json=True,
@@ -132,7 +139,7 @@ def main() -> int:
 
     class_names = getattr(model, "names", {}) or {}
     summary = metrics_to_dict(results, class_names)
-    save_dir = Path(getattr(results, "save_dir", Path(args.project) / eval_name))
+    save_dir = Path(getattr(results, "save_dir", project_path / eval_name))
     report_path = save_dir / "report.json"
     save_dir.mkdir(parents=True, exist_ok=True)
     with report_path.open("w", encoding="utf-8") as f:

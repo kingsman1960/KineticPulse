@@ -43,6 +43,13 @@ def pose_signature(
 
     The detector class is the strongest signal; the pose features promote
     or demote borderline cases (PRD section 5.4 false-positive override).
+
+    ``sitting`` is treated as a non-fall posture by default (Scenario D
+    candidate). It only escalates if the pose features show a sudden
+    descent with body tilt - that pattern is consistent with a syncope
+    collapse where the subject's last conscious motion is to drop into a
+    seated position. The actual escalation decision is still made by the
+    classifier in ``tiers.py`` once accel/HR are folded in.
     """
     cls = (detector_class or "").lower()
     if cls == "fallen":
@@ -59,6 +66,15 @@ def pose_signature(
         if (torso_angle_deg is not None and torso_angle_deg > 70
                 and aspect_ratio is not None and aspect_ratio > 1.0):
             return PoseSignature.PRONE
+        return PoseSignature.UPRIGHT
+    if cls == "sitting":
+        # Sudden seated drop with marked tilt - possible syncope.
+        if (centroid_vel_pps is not None and centroid_vel_pps > 350.0
+                and torso_angle_deg is not None and torso_angle_deg > 50):
+            return PoseSignature.FALLING
+        # Otherwise sitting is just a non-fall posture; fusion treats it the
+        # same as standing for Scenario D dismissal but the engine still
+        # records the distinct class for downstream analytics.
         return PoseSignature.UPRIGHT
     return PoseSignature.UNKNOWN
 

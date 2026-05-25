@@ -14,7 +14,9 @@ camera:
   fps: 30
 
 detector:
-  weights: runs/detect/kp_v1/weights/best.pt
+  # 4-class checkpoint (fallen / falling / stand / sitting). Use the .onnx
+  # or the TensorRT .engine on the Jetson once you've converted them.
+  weights: runs/detect/kp_v2_4cls/weights/best.pt
   conf: 0.5
   iou: 0.45
   imgsz: 640

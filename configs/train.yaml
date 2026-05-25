@@ -5,22 +5,23 @@
 # =========================================================================
 
 # --- Data + model ---
-data: dataset/_merged/data.yaml   # unified 3-class dataset (fallen / falling / stand)
+data: dataset/_merged/data.yaml   # unified 4-class dataset (fallen / falling / stand / sitting)
 model: yolov8s.pt                 # base weights (Ultralytics auto-downloads)
 
 # --- Image / training schedule ---
 imgsz: 640
 epochs: 100
-batch: 16                         # set to 0 for Ultralytics auto-batch
+batch: 8                          # safe for 6 GB GPUs (RTX 4050 Laptop); raise to 16 on 8+ GB
 patience: 20                      # early stopping on no-improvement epochs
 cos_lr: true                      # cosine LR decay
 optimizer: AdamW
 lr0: 0.001
 weight_decay: 0.0005
+close_mosaic: 10                  # disable mosaic in the final 10 epochs for clean convergence
 
-# --- Augmentation (tuned for indoor monitoring scenes) ---
+# --- Augmentation (tuned for indoor monitoring scenes + sitting-class imbalance) ---
 mosaic: 1.0
-mixup: 0.1
+mixup: 0.15                       # bumped from 0.1 to help under-represented sitting class
 hsv_h: 0.015
 hsv_s: 0.5
 hsv_v: 0.3
@@ -33,14 +34,14 @@ shear: 0.0
 perspective: 0.0
 
 # --- Environment ---
-device: ""                        # "" = auto (cuda > mps > cpu)
+device: 0                         # explicit GPU index (use "" for auto / "cpu" to force CPU)
 workers: 4
 seed: 42
 deterministic: true
 
 # --- Output ---
 project: runs/detect              # parent folder
-name: kp_v1                       # run name (best weights: runs/detect/kp_v1/weights/best.pt)
+name: kp_v2_4cls                  # run name (best weights: runs/detect/kp_v2_4cls/weights/best.pt)
 exist_ok: false                   # set true to overwrite an existing run
 save: true
 save_period: -1                   # -1 = only save last + best

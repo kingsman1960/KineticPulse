@@ -3,7 +3,7 @@
 KineticPulse - YOLOv8 fall-posture detector training.
 
 Loads hyperparameters from configs/train.yaml and trains a YOLOv8 model on
-the unified 3-class merged dataset at dataset/_merged/data.yaml.
+the unified 4-class merged dataset at dataset/_merged/data.yaml.
 
 Typical usage:
     python scripts/train.py
@@ -100,6 +100,20 @@ def main() -> int:
     cfg = resolve_paths(cfg)
 
     model_name = cfg.pop("model", "yolov8s.pt")
+
+    # On --resume, point YOLO() at the previous run's last.pt so Ultralytics
+    # picks up exactly where it left off. Without this, YOLO("yolov8s.pt")
+    # plus resume=True is ambiguous and may restart from scratch.
+    if args.resume:
+        project = cfg.get("project", str(REPO_ROOT / "runs" / "detect"))
+        name = cfg.get("name", "kp_v2_4cls")
+        last_pt = Path(project) / name / "weights" / "last.pt"
+        if last_pt.exists():
+            print(f"[resume] using {last_pt}")
+            model_name = str(last_pt)
+        else:
+            print(f"[warn] --resume requested but {last_pt} not found; "
+                  f"falling back to {model_name}", file=sys.stderr)
 
     print("=" * 64)
     print("KineticPulse - YOLOv8 training")

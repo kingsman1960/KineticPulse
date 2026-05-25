@@ -35,7 +35,7 @@ python -m venv .venv
 source .venv/bin/activate
 
 pip install -r requirements.txt
-python -m pytest tests/                # should print 31 passed
+python -m pytest tests/                # should print 33 passed
 ```
 
 Run the full Pipeline 2 with no hardware required:
@@ -67,7 +67,7 @@ KineticPulse/
 ├── kineticpulse/        # The runtime package (Pipeline 2). Production code.
 ├── scripts/             # Stand-alone executables (training, eval, export, dataset merge).
 ├── configs/             # YAML configs that ship with the repo (training hyperparams).
-├── tests/               # pytest suite (31 tests, fast, no GPU/network needed).
+├── tests/               # pytest suite (36 tests; one needs trained weights, the rest run anywhere).
 ├── dataset/             # gitignored, populated by scripts/merge_datasets.py.
 ├── docs/                # This manual + supporting docs.
 ├── runs/                # gitignored, output of training/eval (best.pt etc.).
@@ -121,7 +121,7 @@ Capture, detection, pose, and pose-feature extraction.
 | File | Purpose | Public API |
 |---|---|---|
 | [capture.py](../kineticpulse/vision/capture.py) | Stream frames from USB/CSI/RTSP/file via OpenCV (with GStreamer pipelines on Jetson). Bounded queue with drop-oldest backpressure. | `Frame`, `FrameSource`, `FrameQueue`, `build_source(cfg)` |
-| [detector.py](../kineticpulse/vision/detector.py) | Loads `.pt` / `.onnx` / `.engine` weights via Ultralytics, returns one detection per person per frame. | `FallDetector`, `Detection`, `PostureClass` |
+| [detector.py](../kineticpulse/vision/detector.py) | Loads `.pt` / `.onnx` / `.engine` weights via Ultralytics, returns one detection per person per frame. 4-class output: `fallen` / `falling` / `stand` / `sitting`. | `FallDetector`, `Detection`, `PostureClass` |
 | [pose.py](../kineticpulse/vision/pose.py) | Pretrained YOLOv8n-pose wrapper, returns 17 COCO keypoints per person. | `PoseEstimator`, `PoseResult` |
 | [features.py](../kineticpulse/vision/features.py) | Pure-math feature extraction (torso angle, AR, velocity, stillness). No dependencies on the rest of the package - **fully unit-tested**. | `PoseFeatures`, `extract_features(...)` |
 
@@ -388,35 +388,53 @@ The STT interface is small: an async `listen_once(duration_s) -> SttResult`.
 3. Done — the dispatch worker calls `listen_once` and doesn't care
    which engine answered.
 
-### 6.6 Add a fourth posture class to the detector
+### 6.6 Add another posture class to the detector
 
-This requires retraining. Steps:
+The detector currently has four classes (`fallen`, `falling`, `stand`,
+`sitting`). To add a fifth (e.g. `lying_safe` to distinguish sleeping
+from collapsed), this is the **end-to-end** procedure — every step is
+mandatory or the model and runtime will disagree:
 
 1. Update the unified schema in
    [scripts/merge_datasets.py](../scripts/merge_datasets.py)
-   (`UNIFIED_CLASSES`).
-2. Update the remap tables in `REMAPS`.
+   (`UNIFIED_CLASSES`) — **append-only**. Never reorder existing
+   classes; each checkpoint is hard-bound to the index order in use
+   when it was trained.
+2. Update the remap tables in `REMAPS` to map the relevant source
+   labels into the new unified class. If a source dataset doesn't have
+   the class at all, leave it alone — see the sitting label-noise
+   caveat in [dataset/README.md](../dataset/README.md) for the
+   trade-off this introduces.
 3. Re-run `python scripts/merge_datasets.py` — produces a new
    `dataset/_merged/data.yaml` with the new `nc`.
 4. Update [kineticpulse/vision/detector.py](../kineticpulse/vision/detector.py)
    `PostureClass.from_index` to map the new index.
 5. Update [kineticpulse/fusion/rules.py](../kineticpulse/fusion/rules.py)
-   `pose_signature()` to incorporate the new class.
-6. Retrain with `python scripts/train.py --name kp_v_with_new_class`.
+   `pose_signature()` to incorporate the new class. Default to
+   `PoseSignature.UPRIGHT` if it's a non-fall posture; map to
+   `PoseSignature.PRONE` / `FALLING` only when you've verified the new
+   class actually means "in distress".
+6. Add a regression test in
+   [tests/test_fusion_rules.py](../tests/test_fusion_rules.py) that
+   exercises the new class in at least one safe scenario (dismissal)
+   and one escalation scenario (if applicable).
+7. Retrain with `python scripts/train.py --name kp_v_with_new_class`.
+8. Validate with `python scripts/eval.py --weights ...` and check the
+   confusion matrix for inter-class confusion before deploying.
 
 ### 6.7 Build a TensorRT engine on the Jetson
 
 ```bash
 # On the Jetson, in the project venv:
 python scripts/export.py \
-    --weights runs/detect/kp_v1/weights/best.pt \
+    --weights runs/detect/kp_v2_4cls/weights/best.pt \
     --format engine \
     --half \
     --imgsz 640
 # Verify it:
 /usr/src/tensorrt/bin/trtexec --loadEngine=<path>.engine --fp16
 # Point config.yaml at the engine:
-#   detector.weights: runs/detect/kp_v1/weights/best.engine
+#   detector.weights: runs/detect/kp_v2_4cls/weights/best.engine
 ```
 
 ### 6.8 Test a new fusion rule
@@ -465,9 +483,10 @@ file — they're parameterised by sample rate and duration.
 ### 7.1 Run the suite
 
 ```bash
-python -m pytest tests/                    # all 31 tests, ~0.3 s
+python -m pytest tests/                    # all 36 tests, ~11 s with smoke runs
 python -m pytest tests/test_fusion_rules.py -v
 python -m pytest tests/ -k "ppg" -v         # tests matching a keyword
+python -m pytest tests/ --ignore=tests/test_pipeline_smoke.py   # skip the slow ones
 ```
 
 ### 7.2 What's covered
@@ -475,29 +494,39 @@ python -m pytest tests/ -k "ppg" -v         # tests matching a keyword
 | File | Subject | Count |
 |---|---|---|
 | [tests/test_features.py](../tests/test_features.py) | Pure pose math: torso angle, aspect ratio, velocity, stillness | 14 |
-| [tests/test_fusion_rules.py](../tests/test_fusion_rules.py) | PRD §5 scenarios A/B/C/D + HR-only degradation (no IMU) | 7 |
+| [tests/test_fusion_rules.py](../tests/test_fusion_rules.py) | PRD §5 scenarios A/B/C/D + sitting dismissal + sudden seated collapse + HR-only degradation | 9 |
 | [tests/test_ppg.py](../tests/test_ppg.py) | MAX30102 wire-format decoder + on-Jetson BPM estimator at 55/72/95/130 BPM | 10 |
+| [tests/test_detector_smoke.py](../tests/test_detector_smoke.py) | Loads `runs/detect/kp_v2_4cls/weights/best.pt`, runs inference on one merged-test image, checks the 4-class enum + bbox shape. **Auto-skips** when weights / dataset are absent. | 1 |
+| [tests/test_pipeline_smoke.py](../tests/test_pipeline_smoke.py) | End-to-end `kineticpulse.main.run()` under `--no-camera --mock-ble --mock-stt --max-runtime-s=2` for the resting baseline and the `fall_a_standard` mock scenario. | 2 |
 
 ### 7.3 What's deliberately NOT covered (yet)
 
-- The BLE client (`BleClient`) — would need a fake `bleak` backend; we
-  test through `MockBleClient` indirectly.
-- The vision capture path — needs a real camera or a video file; smoke-test manually.
-- The webhook dispatcher — needs an HTTP server fixture; add when first
+- The real BLE client (`BleClient`) — would need a fake `bleak` backend; we
+  test through `MockBleClient` indirectly inside the pipeline smoke runs.
+- The real vision capture path — needs a webcam or a video file; smoke-test
+  manually with `--no-camera` removed.
+- The webhook dispatcher — needs an HTTP server fixture; add when the first
   webhook integration ships.
-- End-to-end orchestrator — covered manually via the mock CLI flags.
+- WebRTC — currently a stub; replace when the signaling-server design lands.
 
 When you ship a feature with non-trivial logic, **add a unit test for the
 pure-logic portion** even if the integration is mocked.
 
-### 7.4 Keep tests fast
+### 7.4 Keep tests fast (the pure ones)
 
-The whole suite runs in under half a second. No test should:
+The 33 pure-logic tests still run in under half a second combined. The two
+smoke runs in `test_pipeline_smoke.py` each block for ~2 s by design
+(orchestrator shutdown via `--max-runtime-s`). Pure-logic tests should
+still avoid:
 
-- Sleep more than 100 ms.
-- Touch the network.
-- Load a real model.
-- Open a real camera or BLE adapter.
+- Sleeping more than 100 ms.
+- Touching the network.
+- Loading a real model.
+- Opening a real camera or BLE adapter.
+
+Anything that needs real I/O belongs in a smoke-style test that explicitly
+opts into the runtime and self-terminates via `--max-runtime-s` or a
+`pytest.mark.skipif` guard.
 
 Mock at the boundary.
 
@@ -703,11 +732,15 @@ both; install `pulseaudio` or use `--mock-stt` during bring-up.
 ### 10.6 Detector weights default path
 
 `config.example.yaml` ships with
-`detector.weights: runs/detect/kp_v1/weights/best.pt`. That file does
-not exist until `scripts/train.py` has run at least once. The runtime
-will log a warning and continue **without the detector** (pose-only
-fall detection from `pose_signature`), so the rest of the pipeline can
-be tested before training finishes. Don't be alarmed.
+`detector.weights: runs/detect/kp_v2_4cls/weights/best.pt` to match the
+default `name:` in `configs/train.yaml`. That file does not exist until
+`scripts/train.py` has run at least once. The runtime will log a warning
+and continue **without the detector** (pose-only fall detection from
+`pose_signature`), so the rest of the pipeline can be tested before
+training finishes. Don't be alarmed.
+
+If you renamed the training run (`scripts/train.py --name my_run`),
+update `detector.weights` in your `config.yaml` to match the new folder.
 
 ### 10.7 The fusion cooldown
 
@@ -725,7 +758,7 @@ or set `cooldown_ms = 0` while debugging.
 
 Before opening a PR, run through this list:
 
-- [ ] `python -m pytest tests/` is green (31+ tests).
+- [ ] `python -m pytest tests/` is green (33+ tests).
 - [ ] No new linter errors. If you have an LSP set up, fix anything new under your changes.
 - [ ] **New public symbol** → exported from the module's `__init__.py`.
 - [ ] **New CLI flag** → documented in `--help` text **and** in `README.md` + `docs/MANUAL.md` cookbook.

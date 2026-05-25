@@ -199,6 +199,58 @@ def test_scenario_d_bending_with_stable_vitals_is_dismissed() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# Sitting (4-class schema) - should behave as non-fall under stable vitals
+# --------------------------------------------------------------------------- #
+
+
+def test_sitting_with_stable_vitals_is_dismissed() -> None:
+    """A subject sitting calmly in a chair must not trigger any tier.
+    Detector says 'sitting', pose features are upright-ish, accel is
+    quiet, HR is resting -> Scenario D dismissal."""
+    pose = pose_signature(
+        detector_class="sitting",
+        torso_angle_deg=20.0,
+        aspect_ratio=0.7,
+        centroid_vel_pps=15.0,
+    )
+    assert pose == PoseSignature.UPRIGHT
+
+    accel = accel_signature(_accel_quiet(), _thresholds())
+    assert accel == AccelSignature.QUIET
+
+    hr = hr_signature(HrAggregate(latest_bpm=78), _thresholds())
+    assert hr == HrSignature.RESTING
+
+    decision = classify(pose, accel, hr)
+    assert decision.tier == EmergencyTier.TIER_0_DISMISS
+    assert decision.scenario == "D"
+
+
+def test_sudden_seated_collapse_with_bradycardia_triggers_cardiac() -> None:
+    """Subject was standing then dropped into a seated posture with a sharp
+    torso tilt. Combined with bradycardia from the wristband this is the
+    'syncope-while-sitting' edge case - it must still bypass voice."""
+    pose = pose_signature(
+        detector_class="sitting",
+        torso_angle_deg=65.0,
+        aspect_ratio=0.9,
+        centroid_vel_pps=450.0,
+    )
+    assert pose == PoseSignature.FALLING
+
+    accel = accel_signature(_accel_soft_collapse(), _thresholds())
+    assert accel == AccelSignature.SOFT_COLLAPSE
+
+    hr = hr_signature(HrAggregate(latest_bpm=42), _thresholds())
+    assert hr == HrSignature.BRADYCARDIA
+
+    decision = classify(pose, accel, hr)
+    assert decision.tier == EmergencyTier.TIER_2_CARDIAC
+    assert decision.scenario == "C"
+    assert decision.tier.bypasses_voice
+
+
+# --------------------------------------------------------------------------- #
 # Hardware degradation: no accelerometer (current build status)
 # --------------------------------------------------------------------------- #
 

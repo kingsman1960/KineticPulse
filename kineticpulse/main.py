@@ -70,6 +70,8 @@ def parse_args() -> argparse.Namespace:
                    help="Canned utterance returned by --mock-stt (default: empty = silence).")
     p.add_argument("--no-camera", action="store_true",
                    help="Skip camera + detector (telemetry-only smoke test).")
+    p.add_argument("--max-runtime-s", type=float, default=None,
+                   help="Stop the orchestrator after this many seconds (smoke-test / CI).")
     return p.parse_args()
 
 
@@ -285,8 +287,16 @@ async def run(args: argparse.Namespace) -> int:
         asyncio.create_task(_dispatch_worker(cfg, snapshots_q, args, stop), name="dispatch"),
     ]
 
+    sentinels = [asyncio.create_task(stop.wait(), name="stop")]
+    if args.max_runtime_s is not None and args.max_runtime_s > 0:
+        async def _deadline() -> None:
+            await asyncio.sleep(args.max_runtime_s)
+            log.info("--max-runtime-s reached; stopping.")
+            stop.set()
+        sentinels.append(asyncio.create_task(_deadline(), name="deadline"))
+
     done, pending = await asyncio.wait(
-        tasks + [asyncio.create_task(stop.wait(), name="stop")],
+        tasks + sentinels,
         return_when=asyncio.FIRST_COMPLETED,
     )
     stop.set()

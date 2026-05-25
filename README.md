@@ -2,7 +2,7 @@
 
 **Edge-AI Fall Detection & Intelligent Emergency Response System**
 
-KineticPulse is a multi-modal fall detection platform that runs on the **Nvidia Jetson Orin Nano** at the network edge. It fuses **Computer Vision** (a YOLOv8 fall-posture detector trained on a unified 3-class dataset), a **wearable wristband** (accelerometer + heart rate), and **interactive voice verification** to detect falls with high accuracy, classify the medical context (trauma, seizure, syncope, false positive), and escalate emergencies through **WebRTC** live feeds and **Webhook** alerts to caregivers and emergency services.
+KineticPulse is a multi-modal fall detection platform that runs on the **Nvidia Jetson Orin Nano** at the network edge. It fuses **Computer Vision** (a YOLOv8 fall-posture detector trained on a unified 4-class dataset: `fallen`, `falling`, `stand`, `sitting`), a **wearable wristband** (accelerometer + heart rate), and **interactive voice verification** to detect falls with high accuracy, classify the medical context (trauma, seizure, syncope, false positive), and escalate emergencies through **WebRTC** live feeds and **Webhook** alerts to caregivers and emergency services.
 
 > Version 3.0 — Sensor Fusion Update
 
@@ -234,7 +234,7 @@ behaviour without any other code change.
 
 - **Edge runtime:** Nvidia Jetson Orin Nano (JetPack 6.x). Pipeline 2 is tuned for the Ampere GPU + ~67 TOPS INT8 envelope, and falls back gracefully to CUDA, MPS, or CPU during development.
 - **Language:** Python 3.9+
-- **Detection model:** YOLOv8s, trained on the unified 3-class dataset (`fallen`, `falling`, `stand`). See [dataset/README.md](dataset/README.md) for the merge schema.
+- **Detection model:** YOLOv8s, trained on the unified 4-class dataset (`fallen`, `falling`, `stand`, `sitting`). See [dataset/README.md](dataset/README.md) for the merge schema and the sitting label-noise caveat.
 - **Pose backbone:** YOLOv8n-pose (pretrained COCO keypoints).
 - **Temporal head:** ST-GCN interface (currently a deterministic stub; swap in real weights once a temporal-keypoint dataset exists).
 - **Speech-to-Text:** `faster-whisper` (CTranslate2-backed Whisper-small.en).
@@ -274,7 +274,7 @@ The three source datasets are not checked into git. Follow [dataset/README.md](d
 python scripts/merge_datasets.py
 ```
 
-This produces `dataset/_merged/` with the unified 3-class layout (train ~2k images, val 266, test 100).
+This produces `dataset/_merged/` with the unified 4-class layout (train ~2k images, val 266, test 100). Only the train split contains `sitting` examples — see [dataset/README.md](dataset/README.md) for the rationale.
 
 ### 3. Train the fall-posture detector
 
@@ -284,24 +284,35 @@ python scripts/train.py
 python scripts/train.py --model yolov8n.pt --epochs 50 --batch 8
 ```
 
-Best weights end up at `runs/detect/kp_v1/weights/best.pt`.
+Best weights end up at `runs/detect/kp_v2_4cls/weights/best.pt` (the run name is configurable via `configs/train.yaml::name`).
+
+**Reference checkpoint metrics** (Ultralytics 8.4.53, YOLOv8s, 35 epochs with early stopping at epoch 15):
+
+| Split | Images | Instances | mAP50 | mAP50-95 | Notes |
+|---|---:|---:|---:|---:|---|
+| `val`  | 266 | 296 | **0.851** | 0.527 | balanced (falling=100, stand=148, fallen=48) |
+| `test` | 100 | 101 | 0.977 | 0.610 | skewed (falling=7, stand=93, fallen=1) -- not representative on its own |
+
+The `val` number is the honest baseline; the `test` number is inflated because the held-out test split happens to be ~92% `stand` instances and only 7 `falling` instances, which is the hardest class. Expect a real-world mAP50 of roughly **0.85 - 0.90** once the deployment domain is included.
+
+Neither split contains `sitting` instances (the Primary dataset has no `sitting` labels). The class is trained but only verifiable via the live-camera spot check below.
 
 ### 4. Evaluate on the held-out test split
 
 ```bash
-python scripts/eval.py --weights runs/detect/kp_v1/weights/best.pt
+python scripts/eval.py --weights runs/detect/kp_v2_4cls/weights/best.pt
 ```
 
-Prints per-class P / R / mAP50 / mAP50-95 and writes `runs/detect/kp_v1/eval_test/{report.json, confusion_matrix.png}`.
+Prints per-class P / R / mAP50 / mAP50-95 and writes `runs/detect/eval_test/{report.json, confusion_matrix.png}`.
 
 ### 5. Export for deployment
 
 ```bash
 # ONNX always works (laptop / Jetson):
-python scripts/export.py --weights runs/detect/kp_v1/weights/best.pt --format onnx
+python scripts/export.py --weights runs/detect/kp_v2_4cls/weights/best.pt --format onnx
 
 # TensorRT engine - run this ON the Jetson:
-python scripts/export.py --weights runs/detect/kp_v1/weights/best.pt --format engine --half
+python scripts/export.py --weights runs/detect/kp_v2_4cls/weights/best.pt --format engine --half
 ```
 
 ### 6. Run the Pipeline 2 runtime
@@ -315,6 +326,9 @@ python -m kineticpulse.main --config config.yaml --mock-ble --mock-stt
 # Scripted fall scenario from the mock BLE client (great for end-to-end smoke testing):
 python -m kineticpulse.main --config config.yaml --mock-ble --mock-ble-scenario fall_b_seizure --mock-stt
 
+# Timed run for CI / smoke tests (stops itself after N seconds):
+python -m kineticpulse.main --config config.yaml --mock-ble --mock-stt --no-camera --max-runtime-s 3
+
 # Jetson with real wristband + mic:
 python -m kineticpulse.main --config config.yaml
 ```
@@ -325,7 +339,7 @@ python -m kineticpulse.main --config config.yaml
 python -m pytest tests/ -v
 ```
 
-31 tests cover: pose-feature math, one test per PRD section 5 scenario (A/B/C/D), HR-only degradation paths (no IMU yet), and the MAX30102 raw-PPG decoder + on-Jetson BPM estimator at 55/72/95/130 BPM.
+36 tests cover: pose-feature math, one test per PRD section 5 scenario (A/B/C/D), HR-only degradation paths (no IMU yet), the MAX30102 raw-PPG decoder + on-Jetson BPM estimator at 55/72/95/130 BPM, a detector-on-real-image smoke check (skipped when weights are absent), and two end-to-end orchestrator smoke runs that drive the full async pipeline through the mock-BLE / mock-STT / `--max-runtime-s` shutdown path.
 
 ---
 
@@ -394,7 +408,7 @@ KineticPulse/
 
 ## Roadmap
 
-- [x] Dataset merge tooling (`scripts/merge_datasets.py`) with unified 3-class schema
+- [x] Dataset merge tooling (`scripts/merge_datasets.py`) with unified 4-class schema (`fallen` / `falling` / `stand` / `sitting`)
 - [x] Jetson-side scaffold (`kineticpulse/` package, config loader, logging)
 - [x] YOLOv8 training / eval / export pipeline (`scripts/train.py`, `scripts/eval.py`, `scripts/export.py`)
 - [x] FallDetector with `.pt` / `.onnx` / `.engine` backends

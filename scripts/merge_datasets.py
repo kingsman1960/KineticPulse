@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """
-KineticPulse — Merge fall-detection datasets into a unified 3-class schema.
+KineticPulse - Merge fall-detection datasets into a unified 4-class schema.
 
-Unified classes (Option A, safe remap):
+Unified classes:
     0 = fallen
     1 = falling
     2 = stand
+    3 = sitting     (only Secondary 2 supplies this class - see caveat in dataset/README.md)
 
 Sources:
     Primary    : dataset/fall detection.v1i.yolov8        (train + valid + test, CC BY 4.0)
@@ -18,17 +19,20 @@ Remap policy (decided in chat with rationale documented in dataset/README.md):
         fallen     -> fallen
         falling    -> falling
         stand      -> stand
+        (no sitting examples; seated people - if any - remain labelled as `stand`.
+         Acceptable for v1; revisit with manual audit if confusion is high.)
 
     Secondary 1 (['bending', 'fallen', 'falling', 'standing'])
         bending    -> DROP   (label + image)
         fallen     -> fallen
         falling    -> falling
         standing   -> stand
+        (no sitting class)
 
     Secondary 2 (['fall_down', 'lying_down', 'sitting', 'standing'])
         fall_down  -> fallen     (sample paths printed for spot-check)
         lying_down -> DROP       (couch/bed contamination risk)
-        sitting    -> DROP
+        sitting    -> sitting    (NEW - promoted from DROP)
         standing   -> stand
 
 Output:
@@ -77,11 +81,17 @@ except ImportError:
     PIL_AVAILABLE = False
 
 
-UNIFIED_CLASSES: List[str] = ["fallen", "falling", "stand"]
+UNIFIED_CLASSES: List[str] = ["fallen", "falling", "stand", "sitting"]
 UNIFIED_IDX: Dict[str, int] = {name: i for i, name in enumerate(UNIFIED_CLASSES)}
 
 # None in the remap value = DROP this label.
 # If, after remapping, an image has zero surviving labels, the image is also dropped.
+#
+# Note on `sitting`: only Secondary 2 (`fallen detection.yolov8`) labels seated
+# subjects explicitly. The Primary and Secondary 1 datasets have no `sitting`
+# class, so seated people in those datasets stay labelled as `stand`. This
+# introduces a small amount of `sitting` <-> `stand` label noise. See
+# dataset/README.md for the audit path if confusion turns out to be a problem.
 REMAPS: Dict[str, Dict[int, Optional[str]]] = {
     "fall detection.v1i.yolov8": {
         0: "fallen",
@@ -97,7 +107,7 @@ REMAPS: Dict[str, Dict[int, Optional[str]]] = {
     "fallen detection.yolov8": {
         0: "fallen",    # fall_down (spot-check; flip to "falling" if mid-air)
         1: None,        # lying_down
-        2: None,        # sitting
+        2: "sitting",   # promoted from DROP - sitting is a first-class posture
         3: "stand",
     },
 }
@@ -119,6 +129,14 @@ FALL_DOWN_LOCAL_IDX = 0
 
 IMG_EXTS = (".jpg", ".jpeg", ".png", ".bmp", ".webp")
 
+# Class to oversample in the train split to compensate for severe imbalance.
+# Only Secondary 2 supplies `sitting`, so the merged train ends up with ~3% of
+# labels in that class; without oversampling the model's recall on sitting is
+# very poor. Each image containing at least one `sitting` label is duplicated
+# (factor - 1) times into train. Disable with --oversample-sitting 1.
+OVERSAMPLE_TRAIN_CLASS = "sitting"
+OVERSAMPLE_TRAIN_FACTOR_DEFAULT = 4
+
 
 @dataclass
 class MergeStats:
@@ -128,6 +146,8 @@ class MergeStats:
     duplicates_removed: int = 0
     labels_remapped: int = 0
     labels_dropped: int = 0
+    oversampled_images: int = 0   # train-only oversample (sitting class)
+    oversampled_labels: int = 0
     per_class_count: Counter = field(default_factory=Counter)
     per_split_image_count: Counter = field(default_factory=Counter)
     per_dataset_image_count: Counter = field(default_factory=Counter)
@@ -264,9 +284,75 @@ def process_split(
         shutil.copy2(img_path, dst_img)
 
 
+def oversample_train_minority(
+    out_root: Path,
+    class_name: str,
+    factor: int,
+    stats: MergeStats,
+) -> None:
+    """Duplicate every train image whose label file contains ``class_name``
+    ``factor - 1`` additional times. No-op if factor <= 1.
+
+    Duplicates get a ``__dupN`` suffix on both the image and label filenames
+    so the train DataLoader sees them as distinct samples.
+    """
+    if factor <= 1:
+        return
+    if class_name not in UNIFIED_IDX:
+        print(f"[warn] oversample target class '{class_name}' not in schema; skipping",
+              file=sys.stderr)
+        return
+    target_idx = UNIFIED_IDX[class_name]
+    train_img_dir = out_root / "train" / "images"
+    train_lbl_dir = out_root / "train" / "labels"
+    if not train_lbl_dir.exists():
+        return
+
+    for lbl_path in sorted(train_lbl_dir.glob("*.txt")):
+        # Skip already-duplicated files in case the script is re-run on an
+        # existing merge (defensive; we wipe out_root in main() anyway).
+        if "__dup" in lbl_path.stem:
+            continue
+        contains_target = False
+        try:
+            with lbl_path.open("r", encoding="utf-8") as f:
+                for raw in f:
+                    parts = raw.strip().split()
+                    if parts and parts[0].isdigit() and int(parts[0]) == target_idx:
+                        contains_target = True
+                        break
+        except OSError:
+            continue
+        if not contains_target:
+            continue
+
+        img_path = find_image_for_label(lbl_path, train_img_dir)
+        if img_path is None:
+            continue
+
+        for k in range(1, factor):
+            new_stem = f"{lbl_path.stem}__dup{k}"
+            shutil.copy2(img_path, train_img_dir / f"{new_stem}{img_path.suffix}")
+            shutil.copy2(lbl_path, train_lbl_dir / f"{new_stem}.txt")
+            stats.oversampled_images += 1
+            try:
+                with lbl_path.open("r", encoding="utf-8") as f:
+                    for raw in f:
+                        parts = raw.strip().split()
+                        if not parts or not parts[0].isdigit():
+                            continue
+                        ci = int(parts[0])
+                        if 0 <= ci < len(UNIFIED_CLASSES):
+                            stats.per_class_count[UNIFIED_CLASSES[ci]] += 1
+                            stats.oversampled_labels += 1
+            except OSError:
+                pass
+
+
 def write_data_yaml(out_root: Path) -> None:
     data_yaml = out_root / "data.yaml"
     names_list = "[" + ", ".join(f"'{n}'" for n in UNIFIED_CLASSES) + "]"
+    schema_line = ", ".join(f"{i}={n}" for i, n in enumerate(UNIFIED_CLASSES))
     data_yaml.write_text(
         "train: ./train/images\n"
         "val: ./valid/images\n"
@@ -276,7 +362,7 @@ def write_data_yaml(out_root: Path) -> None:
         f"names: {names_list}\n"
         "\n"
         "# Generated by scripts/merge_datasets.py\n"
-        "# Unified schema: 0=fallen, 1=falling, 2=stand\n",
+        f"# Unified schema: {schema_line}\n",
         encoding="utf-8",
     )
 
@@ -305,6 +391,12 @@ def print_report(
     print(f"  (deduplicated)       : {stats.duplicates_removed}")
     print(f"Labels remapped        : {stats.labels_remapped}")
     print(f"Labels dropped         : {stats.labels_dropped}")
+    if stats.oversampled_images:
+        print(
+            f"Train oversample       : +{stats.oversampled_images} images / "
+            f"+{stats.oversampled_labels} labels "
+            f"(class '{OVERSAMPLE_TRAIN_CLASS}' x{args.oversample_sitting})"
+        )
     print()
     print("Per-split image counts:")
     for split in ("train", "valid", "test"):
@@ -335,7 +427,7 @@ def print_report(
 
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Merge KineticPulse fall-detection datasets into a unified 3-class schema.",
+        description="Merge KineticPulse fall-detection datasets into a unified 4-class schema.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
@@ -357,6 +449,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument(
         "--fall-down-samples", type=int, default=20,
         help="Number of `fall_down` sample paths to print for spot-checking (default: 20).",
+    )
+    parser.add_argument(
+        "--oversample-sitting", type=int, default=OVERSAMPLE_TRAIN_FACTOR_DEFAULT,
+        help=(
+            f"Factor by which to oversample sitting-containing train images "
+            f"(default: {OVERSAMPLE_TRAIN_FACTOR_DEFAULT}). Set to 1 to disable."
+        ),
     )
     args = parser.parse_args(argv)
 
@@ -411,6 +510,15 @@ def main(argv: Optional[List[str]] = None) -> int:
             )
 
     if not args.dry_run:
+        oversample_train_minority(
+            out_root=out_root,
+            class_name=OVERSAMPLE_TRAIN_CLASS,
+            factor=args.oversample_sitting,
+            stats=stats,
+        )
+        # Re-count the train split image total so the report reflects oversampling.
+        if stats.oversampled_images:
+            stats.per_split_image_count["train"] += stats.oversampled_images
         write_data_yaml(out_root)
 
     print_report(args, out_root, stats, fall_down_samples)
