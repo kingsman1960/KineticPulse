@@ -1,0 +1,102 @@
+# =========================================================================
+# KineticPulse .gitignore
+# =========================================================================
+
+# --- Datasets (large, partly private) ---------------------------------------
+# The raw datasets and the merged output are not redistributed.
+# See dataset/README.md for how to obtain and rebuild them.
+# Note: ignore *contents* of dataset/ (not the directory itself) so the
+# negation below for README.md can take effect.
+dataset/*
+!dataset/README.md
+
+# --- Model weights / experiment artifacts -----------------------------------
+*.pt
+*.onnx
+*.engine
+*.trt
+*.tflite
+*.pb
+runs/
+weights/
+checkpoints/
+experiments/
+wandb/
+mlruns/
+
+# --- Python -----------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+ENV/
+.envrc
+
+# Build / packaging
+build/
+dist/
+*.egg-info/
+*.egg
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Test / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+.cache
+coverage.xml
+*.cover
+
+# Type checkers / linters
+.mypy_cache/
+.ruff_cache/
+.pyre/
+.pytype/
+
+# --- Jupyter ---------------------------------------------------------------
+.ipynb_checkpoints/
+
+# --- Node / dashboard (when added) -----------------------------------------
+node_modules/
+.next/
+.nuxt/
+.parcel-cache/
+.vite/
+*.tsbuildinfo
+
+# --- Logs / temp -----------------------------------------------------------
+*.log
+*.tmp
+*.bak
+*.swp
+*.swo
+
+# --- OS --------------------------------------------------------------------
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- IDE / editor ----------------------------------------------------------
+.idea/
+.vscode/
+!.vscode/settings.json
+!.vscode/extensions.json
+*.iml
+
+# --- Secrets / local config ------------------------------------------------
+.env
+.env.*
+!.env.example
+config.yaml
+!config.example.yaml
+secrets/
+*.pem
+*.key

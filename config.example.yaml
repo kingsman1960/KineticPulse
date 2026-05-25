@@ -1,0 +1,95 @@
+# =========================================================================
+# KineticPulse - runtime configuration template
+# =========================================================================
+# Copy this file to `config.yaml` and edit. The runtime is launched with:
+#   python -m kineticpulse.main --config config.yaml
+# Use --mock-ble / --mock-stt to develop without the wristband / microphone.
+# =========================================================================
+
+camera:
+  source: usb              # usb | csi | rtsp | file
+  device: "0"              # USB index (string), CSI sensor id, RTSP URL, or file path
+  width: 1280
+  height: 720
+  fps: 30
+
+detector:
+  weights: runs/detect/kp_v1/weights/best.pt
+  conf: 0.5
+  iou: 0.45
+  imgsz: 640
+  device: auto             # auto | cpu | 0 | 0,1
+
+pose:
+  enabled: true
+  weights: yolov8n-pose.pt # auto-downloaded pretrained COCO weights
+  conf: 0.5
+  imgsz: 640
+  device: auto
+
+temporal:
+  enabled: true
+  window_size: 60          # frames (~2 s @ 30 FPS)
+  stride: 5                # run temporal head every N frames
+
+wristband:
+  mac: null                # e.g. "AA:BB:CC:DD:EE:FF" - leave null with --mock-ble
+  reconnect_delay_s: 2.0
+  # --- Hardware capability flags ---
+  # Reflect current build status. Flip to true as components are integrated.
+  has_accelerometer: false # MAX30102 + ESP32 are in progress; IMU not yet ordered.
+  has_ppg_raw: true        # ESP32 firmware streams raw MAX30102 PPG samples to the
+                           #   Jetson, which derives BPM via kineticpulse.sensors.ppg.
+                           # Set to false to subscribe to the Bluetooth SIG standard
+                           # Heart Rate Measurement characteristic (0x2A37) instead.
+  # --- BLE characteristic UUIDs (leave null to use defaults) ---
+  accel_service_uuid: null
+  hr_service_uuid: null
+  ppg_service_uuid: null
+  ppg_sample_rate_hz: 100  # MAX30102 sample rate (typical: 50/100/200 Hz).
+
+thresholds:
+  # Heart-rate bands (BPM)
+  hr_resting_low: 50       # below = bradycardia (PRD Scenario C)
+  hr_resting_high: 100
+  hr_panic_low: 100        # standard fall spike (PRD Scenario A)
+  hr_panic_high: 130
+  hr_seizure_low: 130      # extreme spike (PRD Scenario B)
+  hr_seizure_high: 160
+  pulse_loss_timeout_s: 3.0
+  # Accelerometer
+  impact_g_threshold: 3.0  # |a| in g above this counts as an impact spike
+  tremor_band_hz: [3.0, 8.0]
+  tremor_min_duration_s: 2.0
+
+voice:
+  enabled: true
+  verify_timeout_s: 10.0
+  prompt_text: "A fall has been detected. Are you okay?"
+  distress_words: ["help", "emergency", "save me", "hurt", "pain"]
+  safe_words: ["i am fine", "i'm fine", "im fine", "okay", "ok", "all good"]
+  stt_model: small.en
+  stt_device: auto
+
+alerts:
+  subject_id: subject-001
+  location: "Apartment 4B, Living Room"
+  webhooks:
+    - name: slack
+      url: "https://hooks.slack.com/services/REPLACE/ME"
+      enabled: false
+    - name: sms-gateway
+      url: "https://your-sms-gateway.example/send"
+      headers:
+        Authorization: "Bearer REPLACE_ME"
+      enabled: false
+    # 119 / 911 dispatch integration goes here when available.
+
+webrtc:
+  enabled: false
+  signaling_url: null
+  always_on: false
+
+logging:
+  level: INFO              # DEBUG | INFO | WARNING | ERROR
+  json: false

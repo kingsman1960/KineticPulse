@@ -1,0 +1,47 @@
+# =========================================================================
+# KineticPulse - YOLOv8 training configuration
+# =========================================================================
+# Used by scripts/train.py. Any CLI flag overrides the value here.
+# =========================================================================
+
+# --- Data + model ---
+data: dataset/_merged/data.yaml   # unified 3-class dataset (fallen / falling / stand)
+model: yolov8s.pt                 # base weights (Ultralytics auto-downloads)
+
+# --- Image / training schedule ---
+imgsz: 640
+epochs: 100
+batch: 16                         # set to 0 for Ultralytics auto-batch
+patience: 20                      # early stopping on no-improvement epochs
+cos_lr: true                      # cosine LR decay
+optimizer: AdamW
+lr0: 0.001
+weight_decay: 0.0005
+
+# --- Augmentation (tuned for indoor monitoring scenes) ---
+mosaic: 1.0
+mixup: 0.1
+hsv_h: 0.015
+hsv_s: 0.5
+hsv_v: 0.3
+fliplr: 0.5
+flipud: 0.0
+degrees: 0.0
+translate: 0.1
+scale: 0.5
+shear: 0.0
+perspective: 0.0
+
+# --- Environment ---
+device: ""                        # "" = auto (cuda > mps > cpu)
+workers: 4
+seed: 42
+deterministic: true
+
+# --- Output ---
+project: runs/detect              # parent folder
+name: kp_v1                       # run name (best weights: runs/detect/kp_v1/weights/best.pt)
+exist_ok: false                   # set true to overwrite an existing run
+save: true
+save_period: -1                   # -1 = only save last + best
+plots: true

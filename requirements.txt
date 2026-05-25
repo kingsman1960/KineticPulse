@@ -1,0 +1,37 @@
+# =========================================================================
+# KineticPulse - Python dependencies
+# =========================================================================
+# Phase 1 (training + dataset tooling) and Phase 2 (inference runtime) deps
+# are listed together. Jetson-only / hardware-only deps are commented out
+# and should be installed separately on the deployment target.
+# =========================================================================
+
+# --- Training / dataset tooling -----------------------------------------
+ultralytics>=8.2.0          # YOLOv8 training, eval, ONNX export
+pillow>=10.0.0              # image I/O + dHash dedupe in merge_datasets.py
+numpy>=1.24.0
+opencv-python>=4.8.0
+pyyaml>=6.0
+matplotlib>=3.7.0           # confusion matrix + eval plots
+
+# --- ONNX export / runtime ---------------------------------------------
+onnx>=1.15.0
+onnxruntime>=1.16.0         # CPU/GPU ONNX inference (laptop dev)
+
+# --- Pipeline 2 runtime ------------------------------------------------
+httpx[http2]>=0.25.0        # async webhook dispatcher
+bleak>=0.21.0               # cross-platform BLE client
+sounddevice>=0.4.6          # microphone capture (Phase 2 voice)
+pyttsx3>=2.90               # offline TTS for prompts (cross-platform)
+
+# --- Tests --------------------------------------------------------------
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+
+# --- Jetson / hardware-optional (install on the deployment target) ------
+# tensorrt                  # provided by JetPack; do not pip-install on Jetson
+# pycuda                    # for TRT engine bindings on Jetson
+# ctranslate2>=4.0.0        # Whisper-small.en local STT, CUDA build on Jetson
+# faster-whisper>=1.0.0     # CT2-based Whisper wrapper
+# aiortc>=1.6.0             # WebRTC peer (pulls heavy native deps)
+# av>=11.0.0                # PyAV, required by aiortc
