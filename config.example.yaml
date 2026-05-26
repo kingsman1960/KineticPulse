@@ -35,19 +35,32 @@ temporal:
   stride: 5                # run temporal head every N frames
 
 wristband:
-  mac: null                # e.g. "AA:BB:CC:DD:EE:FF" - leave null with --mock-ble
+  # Transport: BLE was abandoned for stability; the ESP32 now opens a TCP
+  # connection to the Jetson and pushes newline-delimited JSON.
+  transport: tcp           # tcp | ble
+
+  # --- TCP transport (current direction; Jetson is the server) ---
+  tcp_host: "0.0.0.0"      # bind interface; "0.0.0.0" listens on all NICs
+  tcp_port: 5555           # ESP32 firmware connects to <jetson-ip>:5555
+  tcp_idle_timeout_s: 10.0 # close a silent connection after this many seconds
+  tcp_max_line_bytes: 65536
+
+  # --- BLE transport (legacy / fallback) ---
+  # Set transport: ble above to activate; otherwise the fields below are unused.
+  mac: null                # e.g. "AA:BB:CC:DD:EE:FF" - required when transport=ble
   reconnect_delay_s: 2.0
-  # --- Hardware capability flags ---
+  accel_service_uuid: null
+  hr_service_uuid: null
+  ppg_service_uuid: null
+
+  # --- Hardware capability flags (transport-agnostic) ---
   # Reflect current build status. Flip to true as components are integrated.
   has_accelerometer: false # MAX30102 + ESP32 are in progress; IMU not yet ordered.
   has_ppg_raw: true        # ESP32 firmware streams raw MAX30102 PPG samples to the
                            #   Jetson, which derives BPM via kineticpulse.sensors.ppg.
-                           # Set to false to subscribe to the Bluetooth SIG standard
-                           # Heart Rate Measurement characteristic (0x2A37) instead.
-  # --- BLE characteristic UUIDs (leave null to use defaults) ---
-  accel_service_uuid: null
-  hr_service_uuid: null
-  ppg_service_uuid: null
+                           # Set to false if the firmware sends pre-computed HR (BPM)
+                           #   directly (e.g. via the standard 0x2A37 characteristic
+                           #   on BLE, or {"type":"hr","bpm":...} on TCP).
   ppg_sample_rate_hz: 100  # MAX30102 sample rate (typical: 50/100/200 Hz).
 
 thresholds:

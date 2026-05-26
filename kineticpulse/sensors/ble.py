@@ -1,13 +1,17 @@
-"""BLE telemetry client for the KineticPulse wristband.
+"""BLE telemetry client for the KineticPulse wristband (legacy / fallback).
 
-Two implementations:
+The wristband moved from BLE to TCP/Wi-Fi for stability - see
+:mod:`kineticpulse.sensors.tcp` for the primary path. This module is
+kept so future BLE wearables (or a fallback during Wi-Fi outages) can
+flip ``wristband.transport: ble`` in the config and run without code
+changes.
 
-* :class:`BleClient` uses ``bleak`` to talk to a real wristband (PRD
-  section 4 requires auto-reconnect; this client retries on disconnect
-  with exponential backoff up to ``reconnect_delay_s``).
-* :class:`MockBleClient` emits a synthetic stream (resting baseline plus
-  scripted fall scenarios) so the rest of the pipeline can be developed
-  without hardware. Enabled via the ``--mock-ble`` CLI flag.
+:class:`BleClient` uses ``bleak`` to talk to a real wristband (PRD
+section 4 requires auto-reconnect; this client retries on disconnect
+with exponential backoff up to ``reconnect_delay_s``). The synthetic
+generator that used to live in this file as ``MockBleClient`` moved to
+:mod:`kineticpulse.sensors.mock` and was renamed
+``MockSensorClient`` (a back-compat alias is still exported there).
 
 Hardware-capability flags
 -------------------------
@@ -16,30 +20,25 @@ The two ``WristbandConfig`` flags decide which subscriptions the client
 sets up:
 
 * ``has_accelerometer`` - when ``False`` (current build status) the
-  client skips the IMU subscription entirely; the mock generator emits
-  no accel samples either. The fusion engine already returns
-  ``AccelSignature.UNKNOWN`` in that case and degrades gracefully (see
+  client skips the IMU subscription entirely. The fusion engine already
+  returns ``AccelSignature.UNKNOWN`` in that case and degrades
+  gracefully (see
   ``tests/test_fusion_rules.py::test_no_accel_seizure_degrades_to_tier_1``).
 * ``has_ppg_raw`` - when ``True`` (current direction with MAX30102 +
   ESP32) the client subscribes to the raw-PPG characteristic and routes
-  every received packet through :class:`~kineticpulse.sensors.ppg.PpgProcessor`,
-  which produces :class:`HrSample` events. When ``False`` the client
-  subscribes to the Bluetooth SIG standard Heart Rate Measurement
-  characteristic (``0x2A37``).
+  every received packet through
+  :class:`~kineticpulse.sensors.ppg.PpgProcessor`, which produces
+  :class:`HrSample` events. When ``False`` the client subscribes to the
+  Bluetooth SIG standard Heart Rate Measurement characteristic
+  (``0x2A37``).
 """
 
 from __future__ import annotations
 
 import asyncio
-import math
-import random
-from typing import Optional
 
 from kineticpulse.config import WristbandConfig
 from kineticpulse.sensors.parser import (
-    AccelSample,
-    HrSample,
-    PulseLost,
     SensorEvent,
     parse_accel_packet,
     parse_hr_packet,
@@ -68,7 +67,7 @@ class BleClient:
         self.cfg = cfg
         self.events = events
         self._stop = asyncio.Event()
-        self._ppg_processor: Optional[PpgProcessor] = None
+        self._ppg_processor = None
         if cfg.has_ppg_raw:
             self._ppg_processor = PpgProcessor(sample_rate_hz=cfg.ppg_sample_rate_hz)
 
@@ -158,135 +157,3 @@ class BleClient:
 
     def stop(self) -> None:
         self._stop.set()
-
-
-class MockBleClient:
-    """Synthesise telemetry without hardware.
-
-    Default behaviour: resting baseline (HR ~72 BPM, gravity-dominant
-    accelerometer). The scenario can be scripted via the ``scenario``
-    argument. Respects ``WristbandConfig.has_accelerometer`` so that
-    HR-only operation mirrors current hardware status (no IMU yet).
-    """
-
-    SCENARIOS = ("resting", "fall_a_standard", "fall_b_seizure", "fall_c_syncope")
-
-    def __init__(
-        self,
-        cfg: WristbandConfig,
-        events: "asyncio.Queue[SensorEvent]",
-        scenario: str = "resting",
-        accel_hz: int = 50,
-        hr_hz: float = 1.0,
-        seed: int = 0,
-    ) -> None:
-        self.cfg = cfg
-        self.events = events
-        self.scenario = scenario
-        self.accel_hz = accel_hz
-        self.hr_hz = hr_hz
-        self._stop = asyncio.Event()
-        self._rng = random.Random(seed)
-        self._fall_at_s: Optional[float] = None
-
-    async def run(self) -> None:
-        log.info(
-            "MockBleClient: scenario=%s accel=%s hr=%.2fHz",
-            self.scenario,
-            f"{self.accel_hz}Hz" if self.cfg.has_accelerometer else "DISABLED (no IMU)",
-            self.hr_hz,
-        )
-        t0_ms = now_ms()
-        if self.scenario != "resting":
-            self._fall_at_s = 5.0   # let the rest of the pipeline warm up
-
-        loops = [self._hr_loop(t0_ms)]
-        if self.cfg.has_accelerometer:
-            loops.append(self._accel_loop(t0_ms))
-        await asyncio.gather(*loops)
-
-    async def _accel_loop(self, t0_ms: int) -> None:
-        period = 1.0 / self.accel_hz
-        while not self._stop.is_set():
-            t_s = (now_ms() - t0_ms) / 1000.0
-            ax, ay, az = self._accel_at(t_s)
-            self._submit(AccelSample(ax=ax, ay=ay, az=az, timestamp_ms=now_ms()))
-            await asyncio.sleep(period)
-
-    async def _hr_loop(self, t0_ms: int) -> None:
-        period = 1.0 / self.hr_hz
-        while not self._stop.is_set():
-            t_s = (now_ms() - t0_ms) / 1000.0
-            bpm = self._hr_at(t_s)
-            if bpm is None:
-                self._submit(PulseLost(duration_s=period, timestamp_ms=now_ms()))
-            else:
-                self._submit(HrSample(bpm=bpm, timestamp_ms=now_ms()))
-            await asyncio.sleep(period)
-
-    def stop(self) -> None:
-        self._stop.set()
-
-    def _submit(self, ev: SensorEvent) -> None:
-        try:
-            self.events.put_nowait(ev)
-        except asyncio.QueueFull:
-            try:
-                _ = self.events.get_nowait()
-            except asyncio.QueueEmpty:
-                pass
-            self.events.put_nowait(ev)
-
-    def _accel_at(self, t_s: float) -> tuple:
-        """Synthesise the accel signal at time ``t_s``."""
-        noise = lambda: self._rng.gauss(0.0, 0.02)
-        if self.scenario == "resting":
-            return (noise(), noise(), 1.0 + noise())
-
-        if self._fall_at_s is None or t_s < self._fall_at_s:
-            return (noise(), noise(), 1.0 + noise())
-
-        dt = t_s - self._fall_at_s
-        if self.scenario == "fall_a_standard":
-            if 0 <= dt < 0.15:
-                return (4.0 + noise(), 0.0 + noise(), 4.5 + noise())   # impact spike
-            return (noise(), noise(), 1.0 + noise())                   # stillness
-        if self.scenario == "fall_b_seizure":
-            if 0 <= dt < 0.15:
-                return (5.0 + noise(), 0.0 + noise(), 4.5 + noise())
-            tremor = math.sin(2 * math.pi * 5.0 * dt) * 0.4
-            return (tremor + noise(), tremor + noise(), 1.0 + noise())
-        if self.scenario == "fall_c_syncope":
-            if 0 <= dt < 0.15:
-                return (2.5 + noise(), 0.0 + noise(), 3.0 + noise())   # softer collapse
-            return (noise(), noise(), 1.0 + noise())
-        return (noise(), noise(), 1.0 + noise())
-
-    def _hr_at(self, t_s: float) -> Optional[int]:
-        baseline = 72
-        jitter = self._rng.randint(-2, 2)
-        if self.scenario == "resting" or self._fall_at_s is None or t_s < self._fall_at_s:
-            return baseline + jitter
-        dt = t_s - self._fall_at_s
-        if self.scenario == "fall_a_standard":
-            return min(125, baseline + int(dt * 35) + jitter)
-        if self.scenario == "fall_b_seizure":
-            return min(170, baseline + int(dt * 90) + jitter)
-        if self.scenario == "fall_c_syncope":
-            if dt > 2.0:
-                return None    # pulse lost
-            return max(40, baseline - int(dt * 25) + jitter)
-        return baseline + jitter
-
-
-def build_ble_client(
-    cfg: WristbandConfig,
-    events: "asyncio.Queue[SensorEvent]",
-    *,
-    mock: bool = False,
-    scenario: str = "resting",
-):
-    """Factory: pick real or mock BLE client based on flag."""
-    if mock or not cfg.mac:
-        return MockBleClient(cfg, events, scenario=scenario)
-    return BleClient(cfg, events)

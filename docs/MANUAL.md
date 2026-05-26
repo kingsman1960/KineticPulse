@@ -130,18 +130,23 @@ To add a new camera source type, subclass `FrameSource`, override
 
 ### 3.3 `kineticpulse.sensors`
 
-Wristband telemetry — BLE client, parsers, and the on-Jetson PPG
-processor.
+Wristband telemetry — TCP server (production), BLE client (legacy
+fallback), parsers, and the on-Jetson PPG processor.
 
 | File | Purpose |
 |---|---|
-| [parser.py](../kineticpulse/sensors/parser.py) | Decode raw bytes from BLE characteristics into `AccelSample` / `HrSample` / `PulseLost`. Standalone — no asyncio, no bleak. |
-| [ppg.py](../kineticpulse/sensors/ppg.py) | Decode the MAX30102 raw-PPG packet format (`parse_ppg_packet`) and turn a stream of `PpgSample` into `HrSample` via `PpgProcessor` (peak detection, no SciPy). |
-| [ble.py](../kineticpulse/sensors/ble.py) | Real `bleak`-based `BleClient` (with auto-reconnect) **and** `MockBleClient` that scripts the four PRD §5 scenarios. Both honor the `WristbandConfig` capability flags. |
+| [parser.py](../kineticpulse/sensors/parser.py) | `SensorEvent` dataclasses (`AccelSample` / `HrSample` / `PulseLost`) **plus** the binary BLE-packet decoders. Standalone — no asyncio, no bleak. |
+| [ppg.py](../kineticpulse/sensors/ppg.py) | MAX30102 raw-PPG packet decoder (`parse_ppg_packet`) and the BPM estimator (`PpgProcessor`, peak detection, no SciPy). Used by both transports. |
+| [tcp.py](../kineticpulse/sensors/tcp.py) | **`TcpSensorServer`** — single-tenant `asyncio` TCP server bound on `wristband.tcp_host:tcp_port`. Reads newline-delimited JSON from the wristband (`{"type":"hr",...}` / `accel` / `ppg` / `pulse_lost` / `hello`) and emits `SensorEvent`s. This is the primary path. |
+| [ble.py](../kineticpulse/sensors/ble.py) | Legacy `bleak`-based `BleClient` (auto-reconnect with exponential backoff). Activated by `wristband.transport: ble` plus a configured `wristband.mac`. Kept for fallback and future BLE wearables. |
+| [mock.py](../kineticpulse/sensors/mock.py) | `MockSensorClient` (alias `MockBleClient` for back-compat) — transport-agnostic synthetic generator that scripts the four PRD §5 scenarios. Activated by `--mock-ble`. |
+| [`__init__.py`](../kineticpulse/sensors/__init__.py) | Exports `build_sensor_client()`, the factory that picks TCP / BLE / mock based on `cfg.transport` and the `--mock-ble` flag. |
 
-The `--mock-ble` and `--mock-ble-scenario` CLI flags route through
-`build_ble_client()` so the rest of the orchestrator is identical
-whether real BLE or mock is in use.
+`--mock-ble` and `--mock-ble-scenario` (aliases: `--mock-sensors` /
+`--mock-sensors-scenario`) bypass both transports and route through
+`build_sensor_client(..., mock=True)`, so the orchestrator code path is
+identical whether real TCP, real BLE, or the synthetic generator is in
+use.
 
 ### 3.4 `kineticpulse.voice`
 
@@ -208,7 +213,7 @@ sequenceDiagram
     participant Det as Detector<br/>(detector.py)
     participant Pose as PoseEstimator<br/>(pose.py)
     participant Feat as features.py
-    participant BLE as BLE / Mock<br/>(ble.py)
+    participant Sens as Wristband<br/>(tcp.py / ble.py / mock.py)
     participant PPG as PpgProcessor<br/>(ppg.py)
     participant Fus as FusionEngine<br/>(engine.py)
     participant Disp as Dispatch worker<br/>(main.py)
@@ -221,9 +226,9 @@ sequenceDiagram
     Det-->>Fus: Detection (best person)
     Pose-->>Feat: keypoints
     Feat-->>Fus: PoseFeatures
-    BLE->>PPG: PpgSample (raw IR/Red)
+    Sens->>PPG: PpgSample (raw IR/Red, parsed from JSON or BLE bytes)
     PPG-->>Fus: HrSample (derived BPM)
-    BLE-->>Fus: AccelSample / PulseLost
+    Sens-->>Fus: AccelSample / HrSample / PulseLost
     Note over Fus: every ~150 ms,<br/>build snapshot,<br/>classify tier
     Fus-->>Disp: FusionSnapshot (tier != NONE)
     alt Tier 2 (B/C - bypass voice)
@@ -265,7 +270,9 @@ Every inter-stage queue is bounded. When full, the producer **drops the
 oldest item, not the new one**. This keeps end-to-end latency bounded
 in the worst case. See `FrameQueue.put` in
 [capture.py](../kineticpulse/vision/capture.py) and the `_submit`
-helpers in [ble.py](../kineticpulse/sensors/ble.py).
+helpers in [tcp.py](../kineticpulse/sensors/tcp.py),
+[ble.py](../kineticpulse/sensors/ble.py), and
+[mock.py](../kineticpulse/sensors/mock.py).
 
 ### 5.3 Mock-first design
 
@@ -273,7 +280,7 @@ Every external-input module ships a mock with the same interface:
 
 | Real | Mock | Switch |
 |---|---|---|
-| `BleClient` | `MockBleClient` | `--mock-ble` |
+| `TcpSensorServer` / `BleClient` | `MockSensorClient` (alias `MockBleClient`) | `--mock-ble` (alias `--mock-sensors`) |
 | `WhisperStt` | `MockStt` | `--mock-stt` |
 | (camera) | `--no-camera` | flag |
 | `httpx` webhook | (webhook with `enabled: false` no-ops) | config |
@@ -367,15 +374,21 @@ detector:
   weights: runs/detect/kp_v2/weights/best.pt
 ```
 
-### 6.4 Add a new mock BLE scenario
+### 6.4 Add a new mock sensor scenario
 
-In [kineticpulse/sensors/ble.py](../kineticpulse/sensors/ble.py):
+In [kineticpulse/sensors/mock.py](../kineticpulse/sensors/mock.py):
 
-1. Add the scenario name to `MockBleClient.SCENARIOS`.
+1. Add the scenario name to `MockSensorClient.SCENARIOS`.
 2. Add a branch to `_accel_at()` and `_hr_at()` describing the
    synthetic signal.
 3. Add the scenario name to `--mock-ble-scenario` choices in
    `kineticpulse/main.py::parse_args()`.
+
+The mock is transport-agnostic: switching `wristband.transport` between
+`tcp` and `ble` does not affect it. To exercise the **real TCP server**
+end-to-end without the mock, see
+[tests/test_pipeline_smoke.py::test_pipeline_smoke_real_tcp_transport](../tests/test_pipeline_smoke.py)
+for the smallest in-process wristband emulator.
 
 ### 6.5 Swap Whisper for Vosk (or any other STT)
 
@@ -464,17 +477,35 @@ file — they're parameterised by sample rate and duration.
    [fusion/engine.py](../kineticpulse/fusion/engine.py) and the engine's
    `_build_snapshot()`.
 
-### 6.10 Subscribe to a new BLE characteristic
+### 6.10 Subscribe to a new wristband signal
 
-1. Add the UUID and a parser to
-   [sensors/parser.py](../kineticpulse/sensors/parser.py) or a new
-   sibling module.
+The wristband stream is **TCP/JSON** today (BLE is a fallback transport).
+Pick the path that matches what the firmware actually sends:
+
+**Over TCP (current default):**
+
+1. Decide on a `"type"` string for the new signal (e.g. `"skin_temp"`).
+   Coordinate with the ESP32 firmware team so both sides agree on the
+   field names and units.
+2. Define the resulting event in
+   [sensors/parser.py](../kineticpulse/sensors/parser.py) (extend the
+   `SensorEvent` union) — or reuse an existing dataclass if the new
+   signal is already shaped the same way.
+3. In [sensors/tcp.py](../kineticpulse/sensors/tcp.py), add an
+   `elif et == "skin_temp":` branch to `_parse_event(...)` that
+   validates the JSON object and yields the new event type.
+4. If the data is *consumed* by the fusion engine, ensure
+   `engine.py::_ingest_sensors()` handles the new event type.
+
+**Over BLE (legacy / fallback):**
+
+1. Add the UUID and a binary parser to
+   [sensors/parser.py](../kineticpulse/sensors/parser.py).
 2. In `BleClient.run()` (in
-   [sensors/ble.py](../kineticpulse/sensors/ble.py)), add a
-   `client.start_notify(uuid, _on_xxx)` with a callback that submits
-   parsed events.
-3. If the data is *output* into the fusion engine, ensure the engine's
-   `_ingest_sensors()` handles the new event type.
+   [sensors/ble.py](../kineticpulse/sensors/ble.py)) add a
+   `client.start_notify(uuid, _on_xxx)` callback that submits parsed
+   events.
+3. Same fusion-engine update as above.
 
 ---
 
@@ -483,10 +514,11 @@ file — they're parameterised by sample rate and duration.
 ### 7.1 Run the suite
 
 ```bash
-python -m pytest tests/                    # all 36 tests, ~11 s with smoke runs
+python -m pytest tests/                    # all 41 tests, ~25 s with smoke + TCP runs
 python -m pytest tests/test_fusion_rules.py -v
 python -m pytest tests/ -k "ppg" -v         # tests matching a keyword
 python -m pytest tests/ --ignore=tests/test_pipeline_smoke.py   # skip the slow ones
+python -m pytest tests/test_tcp_sensor.py -v                    # focus on the TCP server
 ```
 
 ### 7.2 What's covered
@@ -496,33 +528,36 @@ python -m pytest tests/ --ignore=tests/test_pipeline_smoke.py   # skip the slow 
 | [tests/test_features.py](../tests/test_features.py) | Pure pose math: torso angle, aspect ratio, velocity, stillness | 14 |
 | [tests/test_fusion_rules.py](../tests/test_fusion_rules.py) | PRD §5 scenarios A/B/C/D + sitting dismissal + sudden seated collapse + HR-only degradation | 9 |
 | [tests/test_ppg.py](../tests/test_ppg.py) | MAX30102 wire-format decoder + on-Jetson BPM estimator at 55/72/95/130 BPM | 10 |
+| [tests/test_tcp_sensor.py](../tests/test_tcp_sensor.py) | Real `asyncio.start_server` loopback through `TcpSensorServer`: HR/accel/PulseLost decoding, garbage-input recovery, post-disconnect reconnection, raw-PPG passthrough into `PpgProcessor` | 4 |
 | [tests/test_detector_smoke.py](../tests/test_detector_smoke.py) | Loads `runs/detect/kp_v2_4cls/weights/best.pt`, runs inference on one merged-test image, checks the 4-class enum + bbox shape. **Auto-skips** when weights / dataset are absent. | 1 |
-| [tests/test_pipeline_smoke.py](../tests/test_pipeline_smoke.py) | End-to-end `kineticpulse.main.run()` under `--no-camera --mock-ble --mock-stt --max-runtime-s=2` for the resting baseline and the `fall_a_standard` mock scenario. | 2 |
+| [tests/test_pipeline_smoke.py](../tests/test_pipeline_smoke.py) | End-to-end `kineticpulse.main.run()` under `--no-camera --mock-stt --max-runtime-s` for the resting mock, the `fall_a_standard` mock, and a **real-TCP loopback** (in-process wristband emulator pushes JSON lines through the production `TcpSensorServer`). | 3 |
 
 ### 7.3 What's deliberately NOT covered (yet)
 
-- The real BLE client (`BleClient`) — would need a fake `bleak` backend; we
-  test through `MockBleClient` indirectly inside the pipeline smoke runs.
-- The real vision capture path — needs a webcam or a video file; smoke-test
-  manually with `--no-camera` removed.
-- The webhook dispatcher — needs an HTTP server fixture; add when the first
-  webhook integration ships.
-- WebRTC — currently a stub; replace when the signaling-server design lands.
+- The real BLE client (`BleClient`) — would need a fake `bleak` backend
+  (the BLE path is now legacy / fallback only and is exercised by hand).
+- The real vision capture path — needs a webcam or a video file;
+  smoke-test manually with `--no-camera` removed.
+- The webhook dispatcher — needs an HTTP server fixture; add when the
+  first webhook integration ships.
+- WebRTC — currently a stub; replace when the signaling-server design
+  lands.
 
 When you ship a feature with non-trivial logic, **add a unit test for the
 pure-logic portion** even if the integration is mocked.
 
 ### 7.4 Keep tests fast (the pure ones)
 
-The 33 pure-logic tests still run in under half a second combined. The two
-smoke runs in `test_pipeline_smoke.py` each block for ~2 s by design
-(orchestrator shutdown via `--max-runtime-s`). Pure-logic tests should
-still avoid:
+The 33 pure-logic tests still run in under half a second combined.
+`test_tcp_sensor.py` is fast (~0.5 s, all on the loopback interface);
+the three smoke runs in `test_pipeline_smoke.py` each block for ~2 s by
+design (orchestrator shutdown via `--max-runtime-s`). Pure-logic tests
+should still avoid:
 
 - Sleeping more than 100 ms.
-- Touching the network.
+- Touching a real network (loopback in `test_tcp_sensor.py` is fine).
 - Loading a real model.
-- Opening a real camera or BLE adapter.
+- Opening a real camera, BLE adapter, or external socket.
 
 Anything that needs real I/O belongs in a smoke-style test that explicitly
 opts into the runtime and self-terminates via `--max-runtime-s` or a
@@ -539,20 +574,25 @@ Three pending milestones with exact code touchpoints:
 ### 8.1 ESP32 firmware locks the PPG wire format
 
 **You need from hardware team:**
-- BLE characteristic UUID for raw PPG.
-- Packet format: how many samples per packet, byte order, sample size.
+- The TCP host/port the firmware will connect to (defaults to the
+  Jetson on `:5555`).
+- The exact JSON shape for `{"type":"ppg",...}` — currently expected
+  to be `{"ir":[...],"red":[...],"ts":...}` with equal-length arrays.
 
 **Files to change:**
+- [kineticpulse/sensors/tcp.py](../kineticpulse/sensors/tcp.py) →
+  the `et == "ppg"` branch in `_parse_event(...)` if the firmware
+  picks different field names.
 - [kineticpulse/sensors/ppg.py](../kineticpulse/sensors/ppg.py) →
-  `parse_ppg_packet()` (the `struct.unpack_from("<II", ...)` line if
-  they pick a different layout).
-- [kineticpulse/sensors/ble.py](../kineticpulse/sensors/ble.py) →
-  `DEFAULT_PPG_CHARACTERISTIC` (or set via config).
+  `parse_ppg_packet()` (binary BLE wire format) only if the BLE
+  fallback is also being updated.
 - [config.example.yaml](../config.example.yaml) →
-  `wristband.ppg_service_uuid` if the firmware uses a vendor UUID.
+  `wristband.ppg_sample_rate_hz` if the firmware ships at something
+  other than 100 Hz.
 
-**Smoke test:** point the BLE client at the real wristband, log a few
-PPG packets at `DEBUG`, confirm BPM rises during light exercise.
+**Smoke test:** with the real ESP32 connected, run the orchestrator
+with `--no-camera --mock-stt`, log a few PPG events at `DEBUG`, and
+confirm BPM rises during light exercise.
 
 ### 8.2 IMU (accelerometer) arrives
 
@@ -635,17 +675,21 @@ while True:
 ```
 
 ```python
-# BLE only - prints sensor events from a real wristband
+# Wristband only - prints sensor events as they arrive (TCP or BLE,
+# whichever transport is set in config.yaml). build_sensor_client()
+# picks the right client; flip --mock-ble in argparse-land or pass
+# mock=True here for the synthetic source instead.
 import asyncio
 from pathlib import Path
 from kineticpulse.config import load_config
-from kineticpulse.sensors.ble import BleClient
+from kineticpulse.sensors import build_sensor_client
 
 cfg = load_config(Path("config.yaml")).wristband
 q: asyncio.Queue = asyncio.Queue()
 
 async def main():
-    asyncio.create_task(BleClient(cfg, q).run())
+    client = build_sensor_client(cfg, q)
+    asyncio.create_task(client.run())
     while True:
         print(await q.get())
 
@@ -676,8 +720,12 @@ for s in synthetic_samples:
 | Log line | Meaning |
 |---|---|
 | `Fusion: tier=tier_X scenario=... reason=...` | A tier transition triggered (only logged on change, not every snapshot). |
-| `BLE: %s; reconnecting in %.2fs` | Wristband disconnected; auto-reconnect armed. |
-| `MockBleClient: scenario=... accel=DISABLED ...` | Mock running in HR-only mode (`has_accelerometer=False`). |
+| `TCP: listening on ('0.0.0.0', 5555) (transport=tcp)` | The TCP sensor server bound successfully and is awaiting the wristband. |
+| `TCP: wristband connected from ('192.168.x.x', N)` | ESP32 client just attached. |
+| `TCP: no data from ... in 10.0s; closing for reconnect.` | Idle timeout fired; ESP32 should reopen the socket. |
+| `TCP: bad JSON from ...` | A line couldn't be decoded; that line is skipped, the connection stays up. |
+| `BLE: %s; reconnecting in %.2fs` | Wristband disconnected over BLE; auto-reconnect armed (only relevant when `transport: ble`). |
+| `MockSensorClient: scenario=... accel=DISABLED ...` | Mock running in HR-only mode (`has_accelerometer=False`). |
 | `Webhook ... -> ... (200)` | A webhook fired successfully. |
 | `Webhook ... failed: ...` | A webhook is misconfigured; doesn't affect other webhooks or the loop. |
 | `[stub] WebRTC start requested` | WebRTC stub fired (real aiortc not yet wired). |
@@ -702,7 +750,31 @@ if hasattr(sys.stdout, "reconfigure"):
         pass
 ```
 
-### 10.2 BLE permissions
+### 10.2 Wristband connectivity
+
+**TCP (current default).** The Jetson is the server, so the firewall on
+the Jetson must allow inbound on `wristband.tcp_port` (default `5555`).
+On Linux/Jetson:
+
+```bash
+sudo ufw allow 5555/tcp
+# or, more targeted to the wristband subnet:
+sudo ufw allow from 192.168.1.0/24 to any port 5555 proto tcp
+```
+
+Quick sanity check from any machine on the same LAN:
+
+```bash
+echo '{"type":"hr","bpm":72}' | nc <jetson-ip> 5555
+# orchestrator log should print: TCP: wristband connected from ('...',N)
+```
+
+If `nc` connects but no events flow, it's almost always a JSON shape
+mismatch — run with `logging.level: DEBUG` and look for the
+`TCP: bad JSON from ...` warning.
+
+**BLE (legacy / fallback).** Only relevant when
+`wristband.transport: ble`:
 
 - **Windows**: usually works out of the box.
 - **Linux**: `bleak` uses BlueZ. `sudo setcap 'cap_net_raw,cap_net_admin+eip' $(which python)` if you get "Access denied" without using sudo.

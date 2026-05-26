@@ -34,7 +34,7 @@ from kineticpulse.alerts.webhooks import WebhookDispatcher
 from kineticpulse.config import RuntimeConfig, load_config
 from kineticpulse.fusion.engine import FusionEngine, FusionSnapshot
 from kineticpulse.fusion.tiers import EmergencyTier
-from kineticpulse.sensors.ble import build_ble_client
+from kineticpulse.sensors import build_sensor_client
 from kineticpulse.sensors.parser import SensorEvent
 from kineticpulse.temporal.stgcn import KeypointRingBuffer, TemporalHead
 from kineticpulse.utils.logging import configure_logging, get_logger
@@ -59,11 +59,14 @@ log = get_logger("kineticpulse.main")
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="KineticPulse Pipeline 2 runtime.")
     p.add_argument("--config", type=Path, required=True, help="Path to runtime config YAML.")
-    p.add_argument("--mock-ble", action="store_true",
-                   help="Use the synthetic BLE telemetry generator (no wristband required).")
-    p.add_argument("--mock-ble-scenario", default="resting",
+    p.add_argument("--mock-ble", "--mock-sensors", dest="mock_ble", action="store_true",
+                   help="Use the synthetic sensor generator (no wristband required). "
+                        "Bypasses both the TCP server and the BLE client. "
+                        "(--mock-sensors is a clearer alias kept for the post-BLE world.)")
+    p.add_argument("--mock-ble-scenario", "--mock-sensors-scenario",
+                   dest="mock_ble_scenario", default="resting",
                    choices=("resting", "fall_a_standard", "fall_b_seizure", "fall_c_syncope"),
-                   help="Scenario for the mock BLE client.")
+                   help="Scenario for the mock sensor client.")
     p.add_argument("--mock-stt", action="store_true",
                    help="Use a canned STT response instead of a real microphone.")
     p.add_argument("--mock-stt-response", default="",
@@ -257,9 +260,13 @@ async def run(args: argparse.Namespace) -> int:
             log.warning("Pose model unavailable: %s", exc)
             pose = None
 
-    ble = build_ble_client(
+    # Sensor source: TCP server is the production path now; BLE is a fallback
+    # behind cfg.wristband.transport. The factory transparently degrades to
+    # the synthetic generator when --mock-ble is set or when transport=ble
+    # is selected without a configured MAC.
+    sensors = build_sensor_client(
         cfg.wristband, sensor_q,
-        mock=args.mock_ble or cfg.wristband.mac is None,
+        mock=args.mock_ble,
         scenario=args.mock_ble_scenario,
     )
     fusion = FusionEngine(
@@ -279,7 +286,7 @@ async def run(args: argparse.Namespace) -> int:
             pass
 
     tasks = [
-        asyncio.create_task(ble.run(), name="ble"),
+        asyncio.create_task(sensors.run(), name="sensors"),
         asyncio.create_task(fusion.run(), name="fusion"),
         asyncio.create_task(_vision_worker(
             cfg, detector, pose, detections_q, features_q, stop, args.no_camera,
@@ -300,7 +307,7 @@ async def run(args: argparse.Namespace) -> int:
         return_when=asyncio.FIRST_COMPLETED,
     )
     stop.set()
-    ble.stop()
+    sensors.stop()
     fusion.stop()
     for t in pending:
         t.cancel()

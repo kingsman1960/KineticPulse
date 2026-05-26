@@ -1,28 +1,49 @@
-"""End-to-end smoke test for the Pipeline 2 orchestrator.
+"""End-to-end smoke tests for the Pipeline 2 orchestrator.
 
-Launches :func:`kineticpulse.main.run` with all hardware-touching stages
-mocked or disabled:
+Two complementary modes are covered:
 
-* ``--no-camera``  -> skip OpenCV capture + the trained detector / pose
-  models (this test must run in environments without a webcam, GPU,
-  or trained checkpoint).
-* ``--mock-ble``   -> synthetic accelerometer + heart-rate stream.
-* ``--mock-stt``   -> canned STT result, no microphone access.
-* ``--max-runtime-s=2`` -> orchestrator self-terminates after 2 seconds.
+1. ``--mock-ble`` (synthetic sensor source):
+   bypasses both transports entirely and uses
+   :class:`~kineticpulse.sensors.mock.MockSensorClient`. This is the
+   fastest path and the one CI usually runs.
 
-The test passes when ``run()`` returns ``0`` within the timeout without
-raising.
+2. **Real TCP loopback** (``--mock-ble`` *off*, ``transport: tcp``):
+   the orchestrator opens a real TCP server on ``127.0.0.1`` and we
+   connect a tiny coroutine that plays the wristband, pushing
+   newline-delimited JSON for ~1 s. This catches anything that depends
+   on actual stream framing across the orchestrator + sensor server +
+   fusion engine.
+
+Every smoke test sets:
+
+* ``--no-camera``   -> skip OpenCV capture and the trained detector /
+  pose models (must run on a machine without a webcam, GPU, or
+  trained checkpoint).
+* ``--mock-stt``    -> canned STT result, no microphone access.
+* ``--max-runtime-s`` small -> orchestrator self-terminates quickly.
+
+Each test passes when ``run()`` returns ``0`` within the outer asyncio
+timeout without raising.
 """
 
 from __future__ import annotations
 
 import argparse
 import asyncio
+import json
+import socket
 from pathlib import Path
 
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _free_tcp_port() -> int:
+    """Ask the kernel for an unused TCP port and release it immediately."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
 
 
 MINIMAL_CONFIG = """\
@@ -53,9 +74,13 @@ temporal:
   stride: 5
 
 wristband:
+  transport: tcp
+  tcp_host: "127.0.0.1"
+  tcp_port: 0                # filled in per-test; keep schema-valid here
+  tcp_idle_timeout_s: 5.0
   mac: null
   has_accelerometer: true    # let the mock emit accel events for the fusion loop
-  has_ppg_raw: false         # smoke test uses the standard HR characteristic path
+  has_ppg_raw: false         # smoke test uses pre-computed HR (BPM)
   ppg_sample_rate_hz: 100
 
 thresholds:
@@ -95,10 +120,16 @@ logging:
 """
 
 
-def _make_args(config_path: Path, scenario: str, max_runtime_s: float) -> argparse.Namespace:
+def _make_args(
+    config_path: Path,
+    scenario: str,
+    max_runtime_s: float,
+    *,
+    mock_ble: bool = True,
+) -> argparse.Namespace:
     return argparse.Namespace(
         config=config_path,
-        mock_ble=True,
+        mock_ble=mock_ble,
         mock_ble_scenario=scenario,
         mock_stt=True,
         mock_stt_response="i am fine",
@@ -138,4 +169,73 @@ def test_pipeline_smoke_standard_fall_scenario(tmp_path: Path) -> None:
 
     args = _make_args(config_path, scenario="fall_a_standard", max_runtime_s=2.5)
     exit_code = _run_with_timeout(args, timeout_s=12.0)
+    assert exit_code == 0
+
+
+def test_pipeline_smoke_real_tcp_transport(tmp_path: Path) -> None:
+    """Run the orchestrator with the real TCP server (mock_ble=False), and
+    drive it from a tiny in-process 'wristband' that pushes JSON lines.
+
+    This is the closest analogue to the production data path we can run
+    without firmware: the whole pipeline (TcpSensorServer -> events queue
+    -> fusion engine -> dispatch worker) is exercised with real socket
+    framing.
+    """
+    config_path = tmp_path / "smoke_tcp.yaml"
+    port = _free_tcp_port()
+    cfg_text = MINIMAL_CONFIG.replace("tcp_port: 0", f"tcp_port: {port}")
+    config_path.write_text(cfg_text, encoding="utf-8")
+
+    args = _make_args(
+        config_path, scenario="resting", max_runtime_s=2.5, mock_ble=False,
+    )
+
+    async def _wristband_emulator() -> None:
+        """Connect to the orchestrator's TCP server and stream a few events."""
+        # Give the orchestrator a moment to bind the listening socket.
+        for _ in range(50):
+            try:
+                reader, writer = await asyncio.open_connection("127.0.0.1", port)
+                break
+            except OSError:
+                await asyncio.sleep(0.05)
+        else:
+            raise RuntimeError(f"Could not connect to orchestrator TCP server on :{port}")
+
+        try:
+            writer.write((json.dumps(
+                {"type": "hello", "device": "smoke-test", "fw": "0.0.1"}
+            ) + "\n").encode("utf-8"))
+            for i in range(8):
+                writer.write((json.dumps(
+                    {"type": "hr", "bpm": 72 + (i % 3)}
+                ) + "\n").encode("utf-8"))
+                writer.write((json.dumps(
+                    {"type": "accel", "ax": 0.0, "ay": 0.0, "az": 1.0}
+                ) + "\n").encode("utf-8"))
+                await writer.drain()
+                await asyncio.sleep(0.1)
+        finally:
+            try:
+                writer.close()
+                await writer.wait_closed()
+            except Exception:
+                pass
+
+    async def _runner() -> int:
+        from kineticpulse.main import run
+        # Run the orchestrator and the emulator concurrently; the orchestrator
+        # owns the deadline (--max-runtime-s) so the emulator just feeds it
+        # for a bit and exits.
+        emulator = asyncio.create_task(_wristband_emulator())
+        try:
+            return await asyncio.wait_for(run(args), timeout=12.0)
+        finally:
+            emulator.cancel()
+            try:
+                await emulator
+            except (asyncio.CancelledError, Exception):
+                pass
+
+    exit_code = asyncio.run(_runner())
     assert exit_code == 0

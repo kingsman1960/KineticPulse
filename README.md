@@ -44,7 +44,7 @@ Vision-only fall detectors suffer from high false-positive rates (a dropped obje
 
 ### Vision & Wearable Sensor Fusion
 - Custom wristband with **Accelerometer (IMU)** and **PPG Heart Rate** sensor.
-- Continuous BLE / local Wi-Fi telemetry to the Jetson Nano.
+- **TCP/Wi-Fi telemetry** to the Jetson Nano (BLE was abandoned for stability — kept as a fallback transport behind a config flag).
 - CV pose estimation cross-verified by impact and free-fall accelerometer signatures.
 - Heart-rate context (panic spikes, dangerous drops) feeds severity classification.
 
@@ -67,8 +67,8 @@ Vision-only fall detectors suffer from high false-positive rates (a dropped obje
 
 ```
 +--------------------------+              +--------------------------+
-|   Wearable Wristband     |   BLE / Wi-Fi |     Jetson Nano (Edge)   |
-|  (ESP32 + IMU + PPG HR)  | ───────────▶  |                          |
+|   Wearable Wristband     |  TCP / Wi-Fi  |     Jetson Nano (Edge)   |
+|  (ESP32 + IMU + PPG HR)  | ──JSON lines▶ |                          |
 +--------------------------+              |  ┌────────────────────┐  |
                                           |  │ CV Pose Estimation │  |
 +--------------------------+              |  ├────────────────────┤  |
@@ -89,7 +89,7 @@ Vision-only fall detectors suffer from high false-positive rates (a dropped obje
 
 ### Automated Response Flow
 
-1. **Continuous monitoring** — Jetson processes webcam frames and BLE telemetry in parallel.
+1. **Continuous monitoring** — Jetson processes webcam frames and wristband telemetry (TCP) in parallel.
 2. **Detection & sensor fusion** — flag a fall when CV detects rapid posture change **AND/OR** the accelerometer registers an impact spike.
 3. **Verification** — the speaker plays the prompt; the mic begins listening.
 4. **Judgment** — STT response is evaluated alongside real-time HR data.
@@ -107,8 +107,8 @@ Vision-only fall detectors suffer from high false-positive rates (a dropped obje
 | **Webcam** | Visual input for pose estimation |
 | **Microphone** | Audio input for verbal verification |
 | **Speaker** | Audio output for voice prompts |
-| **Custom Wristband (ESP32)** | Accelerometer + PPG heart rate sensor, BLE/Wi-Fi link |
-| **Network** | Wi-Fi / Ethernet (WebRTC, webhooks) + Bluetooth (sensor link) |
+| **Custom Wristband (ESP32)** | Accelerometer + PPG heart rate sensor, **TCP/Wi-Fi** link to the Jetson (BLE optional fallback) |
+| **Network** | Wi-Fi / Ethernet (WebRTC, webhooks, **wristband TCP stream**); BLE retained as a fallback transport |
 
 ---
 
@@ -156,8 +156,11 @@ Vision            kineticpulse/vision/detector.py    FallDetector (.pt / .onnx /
                   kineticpulse/temporal/stgcn.py     ST-GCN STUB (pass-through head)
         │
         ▼
-Sensors           kineticpulse/sensors/ble.py        BleClient + MockBleClient
-                  kineticpulse/sensors/parser.py     IMU + Bluetooth SIG HR decoding
+Sensors           kineticpulse/sensors/tcp.py        TcpSensorServer (production path)
+                  kineticpulse/sensors/ble.py        BleClient (legacy / fallback)
+                  kineticpulse/sensors/mock.py       MockSensorClient (transport-agnostic)
+                  kineticpulse/sensors/parser.py     SensorEvent + binary BLE decoders
+                  kineticpulse/sensors/ppg.py        MAX30102 raw-PPG -> BPM
         │
         ▼
 Fusion            kineticpulse/fusion/rules.py       Pose / accel / HR signature primitives
@@ -188,27 +191,54 @@ available, so the system is end-to-end functional at every stage:
 | Component | Status | Config flag |
 |---|---|---|
 | **MAX30102 heart-rate sensor** | In integration | `wristband.has_ppg_raw: true` |
-| **ESP32 BLE transmitter** | In integration (streams **raw** PPG samples) | `wristband.has_ppg_raw: true` |
+| **ESP32 transmitter** | In integration — pivoted to **TCP/Wi-Fi** after BLE proved unstable in bench tests | `wristband.transport: tcp` |
 | **Accelerometer (IMU)** | Not yet ordered | `wristband.has_accelerometer: false` |
+
+### Wristband telemetry: TCP/Wi-Fi (current) and BLE (fallback)
+
+The wearable team moved off BLE because peripheral disconnections were too
+frequent. The runtime now defaults to a TCP transport: the **Jetson runs a
+single-tenant TCP server** on `wristband.tcp_host:wristband.tcp_port`
+(default `0.0.0.0:5555`), and the ESP32 connects in as a client and
+pushes **newline-delimited JSON**. One event per line, UTF-8.
+
+```
+{"type":"hello","device":"esp32-kp-001","fw":"0.1.0","caps":["hr","accel","ppg"]}
+{"type":"hr","bpm":72,"ts":1758291234567}
+{"type":"accel","ax":0.10,"ay":0.02,"az":0.99,"ts":1758291234580}
+{"type":"ppg","ir":[1234,1235,...],"red":[1100,1101,...],"ts":1758291234590}
+{"type":"pulse_lost","duration_s":3.0,"ts":1758291235000}
+```
+
+The ESP32-side `ts` field is informational only — the Jetson timestamps
+every event with its own clock when it parses the line, so fusion-engine
+timing is identical regardless of transport. Reconnection is the
+firmware's responsibility (the server simply keeps listening).
+
+The legacy BLE client still ships in [kineticpulse/sensors/ble.py](kineticpulse/sensors/ble.py)
+and can be re-activated by setting `wristband.transport: ble` (plus
+`wristband.mac`); future BLE-capable wearables can adopt the existing path
+without code changes.
 
 ### What "raw PPG streaming" means
 
 The ESP32 firmware reads the MAX30102 FIFO and forwards the raw IR + Red
-samples over BLE without computing BPM on the microcontroller. The
+samples to the Jetson without computing BPM on the microcontroller. The
 Jetson decodes those samples in [kineticpulse/sensors/ppg.py](kineticpulse/sensors/ppg.py)
 and derives BPM via centred moving-average detrending plus peak detection
 with a refractory period. The output is identical in shape to the
 existing `HrSample` events the fusion engine consumes, so nothing else
 in the pipeline changes when the firmware lands.
 
-The wire format defaults to ``<II`` per sample (little-endian uint32 IR
-then uint32 Red, 8 bytes per sample). Adjust the ``struct`` format string
-in `parse_ppg_packet` if the firmware uses something else.
+Over **TCP** the wire format is the JSON line shown above
+(`{"type":"ppg","ir":[...],"red":[...]}`). Over **BLE** (legacy) it
+defaults to `<II` per sample (little-endian uint32 IR then uint32 Red,
+8 bytes per sample); adjust the `struct` format string in
+`parse_ppg_packet` if the firmware uses something else.
 
-Set `wristband.has_ppg_raw: false` to fall back to the **Bluetooth SIG
-standard Heart Rate Measurement** characteristic (UUID ``0x2A37``) - useful
-for bring-up testing with any off-the-shelf compliant HR monitor (Polar
-strap, etc.).
+Set `wristband.has_ppg_raw: false` if the firmware sends pre-computed
+HR (BPM) directly instead of raw PPG bursts. Useful for bring-up testing
+with any off-the-shelf compliant HR monitor (Polar strap, etc.).
 
 ### Degraded operation without the IMU
 
@@ -238,8 +268,8 @@ behaviour without any other code change.
 - **Pose backbone:** YOLOv8n-pose (pretrained COCO keypoints).
 - **Temporal head:** ST-GCN interface (currently a deterministic stub; swap in real weights once a temporal-keypoint dataset exists).
 - **Speech-to-Text:** `faster-whisper` (CTranslate2-backed Whisper-small.en).
-- **Wireless link:** Bluetooth Low Energy (BLE) via `bleak`, plus a `--mock-ble` synthetic telemetry source for development without hardware.
-- **Heart-rate processing:** on-Jetson PPG decoder (`kineticpulse.sensors.ppg`) that consumes raw MAX30102 samples streamed from the ESP32 and derives BPM with a dependency-free peak detector. Falls back to the Bluetooth SIG standard HR characteristic when configured.
+- **Wristband link:** **TCP/Wi-Fi** (Jetson is the server, ESP32 is the client; newline-delimited JSON). BLE retained as a fallback transport behind `wristband.transport: ble`. A `--mock-ble` synthetic telemetry source bypasses both transports for development without hardware.
+- **Heart-rate processing:** on-Jetson PPG decoder (`kineticpulse.sensors.ppg`) that consumes raw MAX30102 samples streamed from the ESP32 and derives BPM with a dependency-free peak detector. Same code path is used over TCP (parsed from the `{"type":"ppg",...}` payload) and BLE (parsed from the binary characteristic).
 - **Wearable firmware:** ESP32 (C/C++ or MicroPython) — currently integrating MAX30102 PPG sensor; IMU pending order. See the [Hardware Status](#hardware-status) section.
 - **Streaming:** WebRTC via `aiortc` (peer + signaling stubbed pending dashboard design).
 - **Alerting:** async `httpx` webhook dispatcher (SMS, Slack, 119 / 911 APIs).
@@ -339,7 +369,7 @@ python -m kineticpulse.main --config config.yaml
 python -m pytest tests/ -v
 ```
 
-36 tests cover: pose-feature math, one test per PRD section 5 scenario (A/B/C/D), HR-only degradation paths (no IMU yet), the MAX30102 raw-PPG decoder + on-Jetson BPM estimator at 55/72/95/130 BPM, a detector-on-real-image smoke check (skipped when weights are absent), and two end-to-end orchestrator smoke runs that drive the full async pipeline through the mock-BLE / mock-STT / `--max-runtime-s` shutdown path.
+41 tests cover: pose-feature math, one test per PRD §5 scenario (A/B/C/D), HR-only degradation paths (no IMU yet), the MAX30102 raw-PPG decoder + on-Jetson BPM estimator at 55/72/95/130 BPM, a detector-on-real-image smoke check (skipped when weights are absent), four direct tests of the TCP sensor server (HR/accel/PulseLost decoding, malformed-input recovery, reconnection, raw-PPG passthrough), and three end-to-end orchestrator smoke runs — two through the mock sensor source and one through a **real TCP loopback** that drives the full async pipeline.
 
 ---
 
@@ -358,8 +388,10 @@ KineticPulse/
 │   ├── temporal/
 │   │   └── stgcn.py             # ST-GCN STUB (pass-through; swap for real weights later)
 │   ├── sensors/
-│   │   ├── ble.py               # bleak BLE client + MockBleClient (scripted scenarios)
-│   │   ├── parser.py            # IMU + Bluetooth SIG HR Measurement decoding
+│   │   ├── tcp.py               # TcpSensorServer - JSON-lines wristband stream (production)
+│   │   ├── ble.py               # bleak BLE client (legacy / fallback transport)
+│   │   ├── mock.py              # MockSensorClient - scripted PRD scenarios, no hardware
+│   │   ├── parser.py            # SensorEvent + binary BLE decoders
 │   │   └── ppg.py               # MAX30102 raw PPG decoder + on-Jetson HR processor
 │   ├── voice/
 │   │   ├── stt.py               # faster-whisper STT + MockStt
@@ -400,7 +432,7 @@ KineticPulse/
 
 ## Non-Functional Requirements
 
-- **Connectivity reliability** — auto-reconnect logic for the BLE / Wi-Fi link to the wristband on signal drops.
+- **Connectivity reliability** — TCP keepalive + idle-timeout on the Jetson side and ESP32-side reconnection on signal drops. (BLE auto-reconnect retained in `BleClient` for the fallback transport.)
 - **Power efficiency (wearable)** — firmware tuned for **24–48 hours** of battery life.
 - **Time synchronization** — wristband telemetry and webcam frames must be tightly time-aligned on the Jetson so the fusion engine evaluates the same instant across modalities.
 
@@ -413,7 +445,7 @@ KineticPulse/
 - [x] YOLOv8 training / eval / export pipeline (`scripts/train.py`, `scripts/eval.py`, `scripts/export.py`)
 - [x] FallDetector with `.pt` / `.onnx` / `.engine` backends
 - [x] Pose backbone wrapper (pretrained YOLOv8n-pose) + pose feature extractor
-- [x] BLE telemetry client with auto-reconnect + `MockBleClient` scenarios
+- [x] TCP/Wi-Fi telemetry server (`TcpSensorServer`, JSON-lines wire format) + BLE fallback (`BleClient`, auto-reconnect) + transport-agnostic `MockSensorClient` scenarios
 - [x] Local STT (faster-whisper) + voice-prompt routine + mock STT
 - [x] Sensor-fusion engine (Tiers 0–2) implementing PRD section 5 scenarios A–D
 - [x] Webhook dispatcher (async, parallel, timeout-bounded)
@@ -422,7 +454,7 @@ KineticPulse/
 - [ ] CSI / RTSP camera bring-up on a real Jetson Orin Nano
 - [ ] ST-GCN replacement once a temporal-keypoint dataset is available
 - [ ] WebRTC peer + caregiver dashboard
-- [ ] ESP32 wristband firmware (IMU + PPG HR + BLE GATT service)
+- [ ] ESP32 wristband firmware (IMU + PPG HR + **TCP client emitting JSON lines per the schema in [Hardware Status](#hardware-status)**)
 - [ ] Battery-life optimization pass on the wristband
 
 ---

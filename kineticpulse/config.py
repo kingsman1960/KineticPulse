@@ -51,14 +51,33 @@ class TemporalConfig:
 
 @dataclass
 class WristbandConfig:
+    """Wristband telemetry source.
+
+    The hardware team pivoted from BLE to TCP/Wi-Fi for stability, so
+    ``transport`` defaults to ``"tcp"``. The Jetson runs a TCP server and
+    the ESP32 connects to it; payloads are newline-delimited JSON. The
+    BLE fields below are kept so future wearables / a fallback path can
+    flip ``transport: ble`` without code changes.
+    """
+
+    transport: str = "tcp"            # tcp | ble
+
+    # --- TCP transport (current direction; Jetson is the server) ------------
+    tcp_host: str = "0.0.0.0"         # interface to bind on the Jetson
+    tcp_port: int = 5555              # ESP32 connects here; firmware default
+    tcp_idle_timeout_s: float = 10.0  # drop a silent connection after this
+    tcp_max_line_bytes: int = 65_536  # safety cap on a single JSON line
+
+    # --- BLE transport (legacy / fallback) ----------------------------------
     mac: Optional[str] = None         # BLE MAC of the wristband, e.g. "AA:BB:CC:..."
     reconnect_delay_s: float = 2.0
     accel_service_uuid: Optional[str] = None
     hr_service_uuid: Optional[str] = None
-    # --- Hardware capability flags (track current build status) --------------
+    ppg_service_uuid: Optional[str] = None   # set when firmware lands; defaults to vendor UUID.
+
+    # --- Capability flags (transport-agnostic) ------------------------------
     has_accelerometer: bool = False   # IMU not yet ordered as of v0.1; True once installed.
     has_ppg_raw: bool = True          # ESP32 streams raw MAX30102 samples (vs. pre-computed BPM).
-    ppg_service_uuid: Optional[str] = None   # set when firmware lands; defaults to vendor UUID.
     ppg_sample_rate_hz: int = 100     # MAX30102 default sample rate.
 
 
