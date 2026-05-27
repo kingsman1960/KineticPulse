@@ -90,6 +90,7 @@ KineticPulse/
 | Dataset merge tooling (3 source datasets → 1) | [scripts/merge_datasets.py](../scripts/merge_datasets.py) + [dataset/README.md](../dataset/README.md) |
 | PRD section 5 tier logic | [kineticpulse/fusion/tiers.py](../kineticpulse/fusion/tiers.py) |
 | BLE wristband client and mock | [kineticpulse/sensors/ble.py](../kineticpulse/sensors/ble.py) |
+| ESP32 TCP wristband contract | [docs/TCP_CONTRACT.md](TCP_CONTRACT.md) |
 | MAX30102 raw-PPG decoder + BPM estimator | [kineticpulse/sensors/ppg.py](../kineticpulse/sensors/ppg.py) |
 | Webhook dispatcher and alert payload | [kineticpulse/alerts/](../kineticpulse/alerts/) |
 | The product overview / pitch | [README.md](../README.md) |
@@ -578,6 +579,10 @@ Three pending milestones with exact code touchpoints:
   Jetson on `:5555`).
 - The exact JSON shape for `{"type":"ppg",...}` — currently expected
   to be `{"ir":[...],"red":[...],"ts":...}` with equal-length arrays.
+- Confirmation against the full ESP32/software contract in
+  [docs/TCP_CONTRACT.md](TCP_CONTRACT.md): event names, units, sample
+  rates, reconnect behavior, and whether firmware sends raw PPG or
+  computed BPM first.
 
 **Files to change:**
 - [kineticpulse/sensors/tcp.py](../kineticpulse/sensors/tcp.py) →
