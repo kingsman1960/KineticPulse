@@ -507,6 +507,29 @@ Pick the path that matches what the firmware actually sends:
    events.
 3. Same fusion-engine update as above.
 
+### 6.11 Simulate the TCP wristband
+
+Use `scripts/tcp_wristband_simulator.py` when you want to exercise the
+production `TcpSensorServer` path without ESP32 firmware. Start the
+runtime with the real TCP transport, then connect the simulator from a
+second terminal:
+
+```bash
+# Terminal 1
+python -m kineticpulse.main --config config.yaml --no-camera --mock-stt
+
+# Terminal 2
+python scripts/tcp_wristband_simulator.py --scenario resting
+python scripts/tcp_wristband_simulator.py --scenario standard_fall
+python scripts/tcp_wristband_simulator.py --scenario pulse_lost
+```
+
+The simulator sends the same newline-delimited JSON schema documented in
+the README: `hello`, `hr`, `accel`, optional `ppg`, and `pulse_lost`
+events. Use `--host` and `--port` if your `wristband.tcp_host` /
+`wristband.tcp_port` differ from `127.0.0.1:5555`; use `--dry-run` to
+print events without opening a socket.
+
 ---
 
 ## 7. Testing
