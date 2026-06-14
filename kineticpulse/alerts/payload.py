@@ -62,6 +62,8 @@ def build_payload(
         "class": snapshot.detector_class,
         "confidence": snapshot.detector_conf,
         "pose_signature": snapshot.pose.value,
+        "action_class": snapshot.action_class,
+        "action_confidence": snapshot.action_conf,
     }
 
     return AlertPayload(

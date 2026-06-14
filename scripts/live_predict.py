@@ -50,11 +50,173 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 DEFAULT_WEIGHTS = REPO_ROOT / "runs" / "detect" / "kp_v2_4cls" / "weights" / "best.pt"
+DEFAULT_RECORD_DIR = REPO_ROOT / "dataset" / "temporal_clips"
 
 
 # Order matters: try the most reliable backend on Windows first.
 _BACKENDS_WIN = ("DSHOW", "MSMF", "ANY")
 _BACKENDS_OTHER = ("ANY",)
+
+
+# --------------------------------------------------------------------------- #
+# Visualisation helpers (skeleton, class bars, label OSD)
+# --------------------------------------------------------------------------- #
+
+
+# COCO-17 skeleton edges + per-edge BGR colour. Mirrors the standard
+# AlphaPose / GajuuzZ rendering, lightly tuned for OpenCV BGR.
+_COCO17_EDGES = [
+    # face
+    (0, 1, (180, 180, 0)), (0, 2, (180, 180, 0)),
+    (1, 3, (180, 180, 0)), (2, 4, (180, 180, 0)),
+    # shoulders + arms
+    (5, 6, (255, 255, 0)),
+    (5, 7, (0, 255, 255)), (7, 9, (0, 255, 255)),
+    (6, 8, (255, 0, 255)), (8, 10, (255, 0, 255)),
+    # torso
+    (5, 11, (0, 200, 200)), (6, 12, (200, 0, 200)),
+    (11, 12, (255, 255, 0)),
+    # legs
+    (11, 13, (0, 220, 0)), (13, 15, (0, 220, 0)),
+    (12, 14, (220, 0, 0)), (14, 16, (220, 0, 0)),
+]
+_KP_COLOR = (0, 255, 0)
+_KP_RADIUS = 3
+_LIMB_THICKNESS = 2
+_KP_CONF_THRESHOLD = 0.30   # below this we don't draw the joint or any limb that touches it
+
+_CLASS_COLORS = {
+    "fallen":  (0,   0,   255),
+    "falling": (0,   140, 255),
+    "stand":   (0,   200, 0),
+    "sitting": (255, 180, 0),
+}
+_CLASS_ORDER = ("fallen", "falling", "stand", "sitting")
+
+
+def draw_skeleton(cv2, img, kpts):
+    """Draw COCO-17 limbs and joints on ``img`` (in-place).
+
+    ``kpts`` is the (17, 3) array from YOLOv8-pose: ``(x, y, conf)``.
+    Joints with confidence below ``_KP_CONF_THRESHOLD`` are skipped, and
+    any limb that touches a low-confidence joint is also skipped (so we
+    don't draw a leg when an ankle is missing).
+    """
+    if kpts is None or kpts.shape[0] < 17:
+        return
+    confs = kpts[:, 2]
+    for a, b, color in _COCO17_EDGES:
+        if confs[a] < _KP_CONF_THRESHOLD or confs[b] < _KP_CONF_THRESHOLD:
+            continue
+        pa = (int(kpts[a, 0]), int(kpts[a, 1]))
+        pb = (int(kpts[b, 0]), int(kpts[b, 1]))
+        cv2.line(img, pa, pb, color, _LIMB_THICKNESS, cv2.LINE_AA)
+    for i in range(17):
+        if confs[i] < _KP_CONF_THRESHOLD:
+            continue
+        cv2.circle(img, (int(kpts[i, 0]), int(kpts[i, 1])),
+                   _KP_RADIUS, _KP_COLOR, -1, cv2.LINE_AA)
+
+
+def draw_class_bars(cv2, img, dist, *, x=10, y=None, width=240, bar_h=20,
+                    gap=6, label_w=78):
+    """Draw per-class confidence bars in the lower-left of ``img``.
+
+    ``dist`` is a dict mapping class label -> probability in [0, 1].
+    """
+    h, w = img.shape[:2]
+    n = len(_CLASS_ORDER)
+    total_h = n * bar_h + (n - 1) * gap
+    if y is None:
+        y = h - 16 - total_h
+    # Faint backdrop for readability.
+    pad = 6
+    cv2.rectangle(
+        img,
+        (x - pad, y - pad - 18),
+        (x + width + pad, y + total_h + pad),
+        (0, 0, 0), -1,
+    )
+    # Title.
+    cv2.putText(img, "TSSTG action probs",
+                (x, y - 6),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1, cv2.LINE_AA)
+    for i, cls in enumerate(_CLASS_ORDER):
+        prob = float(dist.get(cls, 0.0))
+        prob = max(0.0, min(1.0, prob))
+        ry = y + i * (bar_h + gap)
+        # outline
+        cv2.rectangle(img, (x + label_w, ry),
+                      (x + width, ry + bar_h),
+                      (90, 90, 90), 1, cv2.LINE_AA)
+        # fill
+        fill_w = int((width - label_w) * prob)
+        if fill_w > 0:
+            cv2.rectangle(img, (x + label_w, ry),
+                          (x + label_w + fill_w, ry + bar_h),
+                          _CLASS_COLORS[cls], -1, cv2.LINE_AA)
+        # label
+        cv2.putText(img, cls, (x, ry + bar_h - 5),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1, cv2.LINE_AA)
+        # numeric prob
+        cv2.putText(img, f"{prob:.2f}",
+                    (x + width - 46, ry + bar_h - 5),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+
+
+def draw_stable_label(cv2, img, label, conf, *, status_extra=""):
+    """Big top-right OSD showing the hysteresis-confirmed label."""
+    if not label:
+        return
+    color = _CLASS_COLORS.get(label, (255, 255, 255))
+    h, w = img.shape[:2]
+    text = f"{label.upper()}  {conf:.2f}" if conf is not None else label.upper()
+    if status_extra:
+        text = f"{text}   {status_extra}"
+    (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.95, 2)
+    x = max(10, w - tw - 16)
+    y = 36
+    cv2.rectangle(img, (x - 8, y - th - 8), (x + tw + 8, y + 8),
+                  (0, 0, 0), -1)
+    cv2.putText(img, text, (x, y),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.95, color, 2, cv2.LINE_AA)
+
+
+# --------------------------------------------------------------------------- #
+# --record helpers (data collection for TSSTG fine-tuning)
+# --------------------------------------------------------------------------- #
+
+
+_RECORD_KEY_TO_LABEL = {
+    ord("1"): "fallen",
+    ord("2"): "falling",
+    ord("3"): "stand",
+    ord("4"): "sitting",
+}
+
+
+def save_clip(out_dir, label, kpt_seq, fps, image_size, video_path=""):
+    """Persist a (T, 17, 3) keypoint sequence as a labelled .npz clip.
+
+    Layout: ``<out_dir>/<label>/<YYYYMMDD-HHMMSS-mmm>.npz``. The label is
+    encoded both in the path *and* in the file payload so that downstream
+    loaders can verify either way.
+    """
+    import numpy as np
+
+    out_dir = Path(out_dir) / label
+    out_dir.mkdir(parents=True, exist_ok=True)
+    ts_str = time.strftime("%Y%m%d-%H%M%S") + f"-{int((time.time() % 1) * 1000):03d}"
+    path = out_dir / f"{ts_str}.npz"
+    np.savez_compressed(
+        path,
+        keypoints=np.asarray(kpt_seq, dtype=np.float32),
+        label=np.asarray(label),
+        fps=np.asarray(float(fps), dtype=np.float32),
+        image_size=np.asarray(image_size, dtype=np.int32),
+        video_path=np.asarray(video_path),
+    )
+    return path
 
 
 def _backend_const(cv2, name: str) -> int:
@@ -169,23 +331,53 @@ def parse_args() -> argparse.Namespace:
                         "(argmax / sitting-rescue / ...) on each box.")
     p.add_argument("--use-action-classifier", action="store_true",
                    help="Run the TSSTG two-stream ST-GCN action classifier on "
-                        "top of YOLOv8n-pose. Bypasses the 4-class detector "
+                        "top of YOLOv8-pose. Bypasses the 4-class detector "
                         "and reports the dominant action from a 30-frame "
                         "skeleton clip - much more robust to camera angle / "
                         "distance than the per-frame detector. Requires "
                         "models/tsstg/tsstg-model.pth (see docs/MANUAL.md).")
-    p.add_argument("--pose-weights", type=str, default="yolov8n-pose.pt",
+    p.add_argument("--pose-weights", type=str, default="yolov8s-pose.pt",
                    help="YOLOv8 pose checkpoint to use with "
                         "--use-action-classifier. The COCO-pretrained "
-                        "default auto-downloads on first run.")
+                        "default (s-variant, ~13 MB, COCO AP ~60) auto-"
+                        "downloads on first run. Use yolov8n-pose.pt for "
+                        "speed or yolov8m-pose.pt for higher accuracy.")
     p.add_argument("--tsstg-weights", type=str,
                    default="models/tsstg/tsstg-model.pth",
                    help="Path to the released TSSTG checkpoint.")
+    # Visualisation toggles.
+    p.add_argument("--no-skeleton", action="store_true",
+                   help="In --use-action-classifier mode, skip drawing the "
+                        "COCO-17 skeleton overlay (useful for slow CPUs).")
+    p.add_argument("--no-bars", action="store_true",
+                   help="In --use-action-classifier mode, skip drawing the "
+                        "per-class confidence bars in the lower-left corner.")
+    # Data-collection mode for fine-tuning TSSTG on KP-domain clips.
+    p.add_argument("--record", action="store_true",
+                   help="Enable hotkey-driven recording: hold a label key "
+                        "(1=fallen, 2=falling, 3=stand, 4=sitting) to "
+                        "save the most recent --record-window-frames "
+                        "keypoints to dataset/temporal_clips/<label>/. "
+                        "Implies --use-action-classifier.")
+    p.add_argument("--record-dir", type=Path, default=DEFAULT_RECORD_DIR,
+                   help="Where to save recorded clips. Layout is "
+                        "<dir>/<label>/<timestamp>.npz with the keypoints, "
+                        "label, fps, and image size embedded.")
+    p.add_argument("--record-window-frames", type=int, default=30,
+                   help="How many recent keypoint frames to dump per "
+                        "labelled press. The TSSTG checkpoint trains on "
+                        "30-frame clips, which is the natural unit.")
+    p.add_argument("--record-cooldown-s", type=float, default=0.4,
+                   help="Minimum gap between consecutive labelled saves "
+                        "to avoid accidental dupes from a held key.")
     return p.parse_args()
 
 
 def main() -> int:
     args = parse_args()
+    # --record implies --use-action-classifier (we need pose keypoints).
+    if args.record:
+        args.use_action_classifier = True
 
     try:
         import cv2
@@ -321,6 +513,20 @@ def main() -> int:
     # Per-class running max for debug-classes mode (reset every print interval).
     per_class_max: dict = {}
 
+    # --- Record-mode state -------------------------------------------------
+    record_buffer: list = []                    # rolling list of recent main_kpts
+    record_window = max(8, int(args.record_window_frames))
+    last_record_save_t = 0.0
+    last_recorded_msg: Optional[str] = None
+    last_recorded_msg_until = 0.0
+    record_save_counts: Counter = Counter()
+    if args.record:
+        args.record_dir.mkdir(parents=True, exist_ok=True)
+        print("[record] data-collection mode is ON")
+        print(f"[record] press 1=fallen  2=falling  3=stand  4=sitting "
+              f"to save the last {record_window} frames")
+        print(f"[record] output dir: {args.record_dir}")
+
     try:
         while True:
             ok, frame = cap.read()
@@ -363,6 +569,10 @@ def main() -> int:
 
                 if main_kpts is not None:
                     keypoint_buffer.push(main_kpts)
+                    if args.record:
+                        record_buffer.append(main_kpts.copy())
+                        if len(record_buffer) > record_window:
+                            del record_buffer[0:len(record_buffer) - record_window]
 
                 logits = temporal_head.maybe_predict(
                     keypoint_buffer, latest_features=None,
@@ -376,13 +586,9 @@ def main() -> int:
                                         logits.stand, logits.sitting)
 
                 annotated = frame.copy()
-                color_map = {
-                    "fallen":  (0,   0,   255),
-                    "falling": (0,   140, 255),
-                    "stand":   (0,   200, 0),
-                    "sitting": (255, 180, 0),
-                }
-                osd_color = color_map.get(last_action_label, (255, 255, 255))
+                osd_color = _CLASS_COLORS.get(last_action_label, (255, 255, 255))
+
+                # Bbox + per-frame raw label.
                 if main_box is not None:
                     x1, y1, x2, y2 = (int(v) for v in main_box)
                     cv2.rectangle(annotated, (x1, y1), (x2, y2), osd_color, 2)
@@ -393,17 +599,54 @@ def main() -> int:
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, osd_color, 2,
                         cv2.LINE_AA,
                     )
-                # Distribution OSD in the corner.
-                f, fl, st, si = last_action_dist
+
+                # Skeleton overlay (COCO-17 limbs).
+                if not args.no_skeleton and main_kpts is not None:
+                    draw_skeleton(cv2, annotated, main_kpts)
+
+                # Per-class confidence bars (lower-left).
+                if not args.no_bars and last_action_logits is not None:
+                    draw_class_bars(cv2, annotated, {
+                        "fallen":  last_action_dist[0],
+                        "falling": last_action_dist[1],
+                        "stand":   last_action_dist[2],
+                        "sitting": last_action_dist[3],
+                    })
+
+                # Hysteresis-confirmed stable label, top-right.
+                stable_lbl = (
+                    last_action_logits.stable_label
+                    if last_action_logits is not None else None
+                )
+                if stable_lbl:
+                    stable_conf = getattr(last_action_logits, stable_lbl, 0.0)
+                    extra = "[REC]" if args.record else ""
+                    draw_stable_label(cv2, annotated, stable_lbl, stable_conf,
+                                      status_extra=extra)
+                elif args.record:
+                    draw_stable_label(cv2, annotated, "warming up", None,
+                                      status_extra="[REC]")
+
+                # Buffer fill % for context.
                 fill_pct = int(100 * len(keypoint_buffer)
                                / max(1, keypoint_buffer.maxlen))
                 cv2.putText(
                     annotated,
-                    f"buf {fill_pct:3d}%  fallen={f:.2f}  falling={fl:.2f}  "
-                    f"stand={st:.2f}  sitting={si:.2f}",
+                    f"buf {fill_pct:3d}%",
                     (10, 56), cv2.FONT_HERSHEY_SIMPLEX, 0.6,
                     (255, 255, 255), 2, cv2.LINE_AA,
                 )
+
+                # Record-mode confirmation toast (lasts ~1.5 s after a save).
+                if (args.record and last_recorded_msg
+                        and time.monotonic() < last_recorded_msg_until):
+                    cv2.putText(
+                        annotated, last_recorded_msg,
+                        (10, annotated.shape[0] - 200),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7,
+                        (60, 255, 255), 2, cv2.LINE_AA,
+                    )
+
                 # Skip the detector / priority branches below.
                 results = None
                 r0 = None
@@ -563,6 +806,39 @@ def main() -> int:
             key = cv2.waitKey(1) & 0xFF
             if key in (ord("q"), 27):    # q or ESC
                 break
+
+            # ----- Record-mode label keys (1/2/3/4) -------------------- #
+            if args.record and key in _RECORD_KEY_TO_LABEL:
+                label = _RECORD_KEY_TO_LABEL[key]
+                now_t = time.monotonic()
+                if now_t - last_record_save_t < args.record_cooldown_s:
+                    pass  # debounce held key
+                elif len(record_buffer) < record_window:
+                    msg = (f"[record] need {record_window} frames; "
+                           f"have {len(record_buffer)}. Stay in frame and try again.")
+                    print(msg)
+                    last_recorded_msg = "need more frames"
+                    last_recorded_msg_until = now_t + 1.0
+                else:
+                    last_record_save_t = now_t
+                    h_, w_ = frame.shape[:2]
+                    out_path = save_clip(
+                        out_dir=args.record_dir,
+                        label=label,
+                        kpt_seq=record_buffer[-record_window:],
+                        fps=fps_ema or 0.0,
+                        image_size=(w_, h_),
+                        video_path=f"camera:{chosen}",
+                    )
+                    record_save_counts[label] += 1
+                    short = out_path.relative_to(REPO_ROOT) \
+                        if out_path.is_absolute() and REPO_ROOT in out_path.parents \
+                        else out_path
+                    print(f"[record] saved {label!r:<10s} -> {short}  "
+                          f"({record_save_counts[label]} total for this label)")
+                    last_recorded_msg = (f"saved {label} #{record_save_counts[label]}")
+                    last_recorded_msg_until = now_t + 1.5
+
             # Bail out as soon as the user closes the window with the X button.
             try:
                 if cv2.getWindowProperty(win, cv2.WND_PROP_VISIBLE) < 1:
@@ -572,6 +848,14 @@ def main() -> int:
     finally:
         cap.release()
         cv2.destroyAllWindows()
+
+    if args.record and record_save_counts:
+        total = sum(record_save_counts.values())
+        print(f"[record] session totals ({total} clips):")
+        for lbl in _CLASS_ORDER:
+            n = record_save_counts.get(lbl, 0)
+            if n > 0:
+                print(f"[record]   {lbl:<8s} {n:4d}")
 
     print("Live spot-check exited cleanly.")
     return 0

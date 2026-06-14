@@ -674,51 +674,150 @@ in deployment.
 The orchestrator's `await webrtc.start(snapshot)` call site won't
 change.
 
-### 8.4 Wire `ActionLogits` into the fusion engine
+### 8.4 `ActionLogits` ↔ fusion engine wiring (DONE)
 
-The TSSTG action classifier already produces 4-class
-`ActionLogits` (see §3.7), but the current `FusionEngine` does not
-consume them yet — it still derives `PoseSignature` from the
-per-frame YOLO detector class plus pose features. To upgrade the
-engine to use the temporal head:
+The temporal head is now plumbed into the fusion engine end-to-end.
+This subsection documents the contract so future contributors don't
+re-derive it. (Tests covering the wiring live in
+`tests/test_fusion_action_logits.py` and
+`tests/test_temporal_stabilisation.py`.)
 
-**Files to change:**
+**Data flow.** `_vision_worker` in `kineticpulse/main.py` calls
+`TemporalHead.maybe_predict()` every frame and pushes the returned
+`ActionLogits` onto a bounded `actions_q` (drop-oldest on full).
+`FusionEngine._ingest_actions()` consumes that queue and stores the
+latest `ActionLogits` on the engine. Each evaluation cycle,
+`_build_snapshot()` passes it into `pose_signature(...)`.
 
-- [kineticpulse/main.py](../kineticpulse/main.py) → push every new
-  `ActionLogits` produced by `TemporalHead.maybe_predict()` into a
-  bounded queue, alongside the existing `detections` and `features`
-  queues.
-- [kineticpulse/fusion/engine.py](../kineticpulse/fusion/engine.py) →
-  add an `_ingest_actions` task that records the latest
-  `ActionLogits`; pass it into `_build_snapshot()` so the engine can
-  prefer the temporal class over the static detector when the
-  temporal head is confident.
-- [kineticpulse/fusion/rules.py](../kineticpulse/fusion/rules.py) →
-  optional: gate `pose_signature` so that an `ActionLogits.argmax_label`
-  of `falling` / `fallen` boosts the signature even if the static
-  detector disagrees.
+**Override rules in `pose_signature`** (in
+[kineticpulse/fusion/rules.py](../kineticpulse/fusion/rules.py)):
 
-This is intentionally split into a separate phase because it changes
-the engine's input contract; the action classifier is already useful
-standalone via `scripts/live_predict.py --use-action-classifier`.
+1. If `action_logits.stable_label is not None` (the hysteresis-confirmed
+   label from `TemporalHead`), it replaces the static detector class.
+   This is the **production path** — `stable_label` only flips after
+   `temporal.hysteresis_min_consecutive` consecutive smoothed-argmax
+   matches, so it is deliberately low-jitter.
+2. Otherwise, if the raw smoothed argmax probability is at least
+   `temporal.action_confidence_threshold` (default 0.55), it replaces
+   the detector class. This handles the warm-up window before
+   hysteresis settles.
+3. Otherwise the static detector class wins. The rest of the function
+   (torso-angle / aspect-ratio / velocity demotions) is unchanged.
 
-### 8.5 Fine-tune TSSTG on environment data
+**Output stabilisation** (in
+[kineticpulse/temporal/stgcn.py](../kineticpulse/temporal/stgcn.py)):
+`TemporalHead._stabilise()` runs after every backend prediction and
+publishes a smoothed `ActionLogits` whose `stable_label` field is the
+hysteresis-confirmed class. EMA weight (`smoothing_alpha`) and
+hysteresis depth (`hysteresis_min_consecutive`) are configurable on
+`TemporalConfig`. Recommended starting values are 0.4 and 3
+respectively (tuned against the 1–2 s sitting↔falling oscillation seen
+in the live test).
+
+**Snapshot + alert payload.** `FusionSnapshot` now carries
+`action_class` / `action_conf` (stable label if available, raw argmax
+otherwise), and `build_payload()` includes them under
+`detector.action_class` / `detector.action_confidence` so downstream
+webhook consumers (caregiver dashboard) can render the temporal head's
+verdict alongside the per-frame detector.
+
+### 8.4.1 Tuning the override behaviour
+
+`temporal.action_confidence_threshold` controls how aggressive the
+override is during warm-up. The live test on a top-down laptop webcam
+showed `stand` confidence 0.85–0.93, `sitting` 0.55–0.82, `fallen` 0.49.
+0.55 is therefore a reasonable knob: it always picks up `stand` and
+`sitting`, mostly picks up `fallen`, and stays cautious about `falling`
+(where 0.40–0.50 is common in transition windows). Lower values trade
+latency for sensitivity; raise it if the static detector is more
+trustworthy than TSSTG in your deployment domain.
+
+### 8.5 Fine-tune TSSTG on environment data (toolchain LANDED)
 
 If the released checkpoint mis-classifies your specific setup
 (camera angle, room layout, subject demographics), the fix is data,
-not architecture. Add training and dataset scripts:
+not architecture. The full workflow is now in-tree as three composable
+scripts that share a single on-disk schema:
 
-- `scripts/extract_keypoints.py` — given annotated video clips, run
-  YOLOv8n-pose, convert to coco_cut 14, save as `.npz` per-clip
-  alongside the action label.
-- `scripts/train_temporal.py` — load `kineticpulse.temporal.stgcn_model
-  .TwoStreamSpatialTemporalGraph`, optionally initialise from
-  `models/tsstg/tsstg-model.pth`, train against your `.npz` clips,
-  save the new weights into `models/tsstg/`.
+```
+dataset/temporal_clips/<label>/<stem>.npz
+  keypoints  : float32, (T, 17, 3)   raw COCO-17 + score
+  label      : "fallen" | "falling" | "stand" | "sitting"
+  fps        : float32                effective FPS post-stride
+  image_size : int32 (W, H)
+  video_path : provenance string
+```
 
-Because the architecture in `stgcn_model.py` is byte-compatible with
-the upstream, any checkpoint trained this way drops back into
-`temporal.weights` without code changes.
+**Step 1 — collect labelled clips.** Either record live in front of
+the camera, or batch-extract from existing footage:
+
+```bash
+# Live: hotkeys 1=fallen 2=falling 3=stand 4=sitting save the last
+# 30 frames of keypoints to dataset/temporal_clips/<label>/.
+python scripts/live_predict.py --camera 0 --backend DSHOW --record
+
+# Batch from videos. Folder convention <root>/<label>/*.mp4 auto-labels;
+# pass --label LABEL to override for a single file or flat folder.
+python scripts/extract_keypoints.py --input data/raw_clips --out dataset/temporal_clips
+python scripts/extract_keypoints.py --input data/sit_demo.mp4 --label sitting
+python scripts/extract_keypoints.py --input data/long_session.mp4 --label stand \
+    --clip-window 30 --clip-overlap 15
+```
+
+Both tools normalise to the same `.npz` schema, so they compose: live-
+recorded sittings + extracted falling videos + extracted stands all
+live in the same `dataset/temporal_clips/` tree.
+
+**Step 2 — fine-tune.** `scripts/train_temporal.py` keeps the upstream
+**7-output head** (`Standing / Walking / Sitting / Lying Down / Stand
+up / Sit down / Fall Down`) so the released `tsstg-model.pth` loads
+with `strict=True`. We supervise only the four classes we record by
+mapping each to its canonical 7-way index:
+
+| KP label | TSSTG index |
+|---|---|
+| `stand`   | 0 (Standing)   |
+| `sitting` | 2 (Sitting)    |
+| `fallen`  | 3 (Lying Down) |
+| `falling` | 6 (Fall Down)  |
+
+Loss is BCE on the sigmoided 7-way output with one-hot targets at the
+mapped index. The transition heads (`Walking`, `Stand up`, `Sit down`)
+are unsupervised and their existing weights drift slowly, so the
+upstream generalisation is preserved. Cropping rules: random 30-frame
+windows in training, centred crop in val. Forward-fill of zero-score
+rows so blank frames don't poison the per-clip min-max rescale.
+
+```bash
+# Default: full backbone trainable, 40 epochs, Adam(1e-4), 4 random
+# crops per clip per epoch, 20% stratified val split.
+python scripts/train_temporal.py
+
+# Tiny dataset (< ~200 clips)? Train only the final fcn linear layer
+# to avoid catastrophic overfitting:
+python scripts/train_temporal.py --freeze-backbone --epochs 60
+
+# Plug new weights into live test:
+python scripts/live_predict.py --use-action-classifier \
+    --tsstg-weights models/tsstg/finetune-<run>/best.pth
+```
+
+Each run writes `models/tsstg/finetune-<timestamp>/`:
+
+* `best.pth` — lowest validation loss
+* `last.pth` — last epoch (use this if you trust your val split was small)
+* `train.csv` — per-epoch `train_loss / train_acc4 / val_loss / val_acc4`
+* `args.json` — frozen CLI snapshot for reproducibility
+
+Validation accuracy is reported on **the 4 indices we supervise**, not
+the full 7-way argmax (the heads we don't train would otherwise inflate
+the metric). The final epoch also prints a 4×4 confusion matrix so you
+can see whether `sitting` keeps bleeding into `falling`, etc.
+
+Because `stgcn_model.py` is byte-compatible with the upstream, any
+checkpoint trained this way drops straight back into `temporal.weights`
+in `config.yaml` (or `--tsstg-weights ...` for `live_predict.py`)
+without code changes.
 
 ---
 

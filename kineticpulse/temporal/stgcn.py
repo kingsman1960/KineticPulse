@@ -20,13 +20,13 @@ that has enough buffered frames:
 from __future__ import annotations
 
 import collections
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Deque, List, Optional
+from typing import Deque, Dict, List, Optional
 
 import numpy as np
 
 from kineticpulse.config import TemporalConfig
+from kineticpulse.temporal.types import ActionLogits
 from kineticpulse.utils.logging import get_logger
 from kineticpulse.vision.features import PoseFeatures
 
@@ -34,33 +34,10 @@ log = get_logger(__name__)
 
 
 # --------------------------------------------------------------------------- #
-# Public dataclasses
+# Public dataclasses (re-exported from the lightweight types module so that
+# imports like ``from kineticpulse.temporal.stgcn import ActionLogits`` still
+# work; the canonical home is ``kineticpulse.temporal.types``).
 # --------------------------------------------------------------------------- #
-
-
-@dataclass
-class ActionLogits:
-    """Per-class probabilities for the 4-class KineticPulse schema.
-
-    The four fields sum to 1 (within float tolerance) when produced by
-    either backend, so callers can treat them as a probability
-    distribution. Extra context (e.g. raw 7-way TSSTG output) is
-    intentionally not exposed here - downstream code consumes only the
-    4-class collapse.
-    """
-
-    fallen: float
-    falling: float
-    stand: float
-    sitting: float
-    timestamp_ms: int
-
-    @property
-    def argmax_label(self) -> str:
-        return max(
-            ("fallen", "falling", "stand", "sitting"),
-            key=lambda k: getattr(self, k),
-        )
 
 
 class KeypointRingBuffer:
@@ -109,6 +86,19 @@ class TemporalHead:
         self._classifier_loaded = False
         self._classifier_unavailable = False
         self._fallback_logged = False
+
+        # --- Output stabilisation state (EMA + hysteresis) ----------------
+        # Smoothed probability vector across the 4 classes. None until the
+        # first prediction lands (we initialise from the first sample so we
+        # don't waste predictions converging from zero).
+        self._smoothed: Optional[Dict[str, float]] = None
+        # Last hysteresis-confirmed label. None until the head has seen
+        # `hysteresis_min_consecutive` consecutive predictions agreeing on
+        # the same argmax.
+        self._stable_label: Optional[str] = None
+        # Currently accumulating candidate.
+        self._candidate_label: Optional[str] = None
+        self._candidate_count: int = 0
 
     # ------------------------------------------------------------------ #
     # backend management
@@ -179,13 +169,14 @@ class TemporalHead:
             return None
 
         self._try_load_classifier()
+        raw: Optional[ActionLogits] = None
         if self._classifier is not None:
-            result = self._predict_with_tsstg(keypoint_buffer, timestamp_ms)
-            if result is not None:
-                return result
+            raw = self._predict_with_tsstg(keypoint_buffer, timestamp_ms)
             # If TSSTG inference failed mid-flight, fall through to
             # heuristic so the engine still receives a signal.
-        return self._predict_with_heuristic(latest_features, timestamp_ms)
+        if raw is None:
+            raw = self._predict_with_heuristic(latest_features, timestamp_ms)
+        return self._stabilise(raw)
 
     # ------------------------------------------------------------------ #
     # backends
@@ -214,6 +205,64 @@ class TemporalHead:
             stand=pred.stand,
             sitting=pred.sitting,
             timestamp_ms=timestamp_ms,
+        )
+
+    # ------------------------------------------------------------------ #
+    # Output stabilisation
+    # ------------------------------------------------------------------ #
+
+    _CLASSES = ("fallen", "falling", "stand", "sitting")
+
+    def _stabilise(self, raw: ActionLogits) -> ActionLogits:
+        """Apply EMA smoothing + hysteresis to a raw prediction.
+
+        Returns a *new* ``ActionLogits`` whose four probability fields
+        are the smoothed values and whose ``stable_label`` is set once
+        the same argmax has held for ``hysteresis_min_consecutive``
+        predictions in a row.
+        """
+        alpha = float(self.cfg.smoothing_alpha)
+        alpha = max(0.0, min(1.0, alpha))
+
+        new_vec = {k: getattr(raw, k) for k in self._CLASSES}
+
+        if self._smoothed is None or alpha >= 1.0:
+            self._smoothed = dict(new_vec)
+        else:
+            self._smoothed = {
+                k: alpha * new_vec[k] + (1.0 - alpha) * self._smoothed[k]
+                for k in self._CLASSES
+            }
+
+        smoothed_argmax = max(self._CLASSES, key=lambda k: self._smoothed[k])
+
+        # Hysteresis: latch onto a label only once it has held for N
+        # consecutive predictions. The candidate counter accumulates
+        # while the smoothed argmax disagrees with the published stable
+        # label and matches the current candidate; once it crosses the
+        # threshold we publish.
+        min_consec = max(1, int(self.cfg.hysteresis_min_consecutive))
+        if smoothed_argmax == self._stable_label:
+            self._candidate_label = None
+            self._candidate_count = 0
+        else:
+            if smoothed_argmax == self._candidate_label:
+                self._candidate_count += 1
+            else:
+                self._candidate_label = smoothed_argmax
+                self._candidate_count = 1
+            if self._candidate_count >= min_consec:
+                self._stable_label = self._candidate_label
+                self._candidate_label = None
+                self._candidate_count = 0
+
+        return ActionLogits(
+            fallen=float(self._smoothed["fallen"]),
+            falling=float(self._smoothed["falling"]),
+            stand=float(self._smoothed["stand"]),
+            sitting=float(self._smoothed["sitting"]),
+            timestamp_ms=raw.timestamp_ms,
+            stable_label=self._stable_label,
         )
 
     @staticmethod

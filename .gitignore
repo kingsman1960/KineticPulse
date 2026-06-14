@@ -12,6 +12,7 @@ dataset/*
 
 # --- Model weights / experiment artifacts -----------------------------------
 *.pt
+*.pth
 *.onnx
 *.engine
 *.trt
@@ -23,6 +24,11 @@ checkpoints/
 experiments/
 wandb/
 mlruns/
+# TSSTG fine-tune run directories (train.csv, args.json, best.pth, last.pth).
+models/tsstg/finetune-*/
+
+# --- Keypoint clip caches (live-recorded + extracted from videos) ----------
+*.npz
 
 # --- Python -----------------------------------------------------------------
 __pycache__/

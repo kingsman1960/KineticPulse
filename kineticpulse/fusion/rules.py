@@ -15,6 +15,7 @@ from typing import List, Optional, Sequence
 
 from kineticpulse.config import ThresholdsConfig
 from kineticpulse.sensors.parser import AccelSample, HrSample, PulseLost, SensorEvent
+from kineticpulse.temporal.types import ActionLogits
 
 
 # --------------------------------------------------------------------------- #
@@ -38,6 +39,8 @@ def pose_signature(
     torso_angle_deg: Optional[float],
     aspect_ratio: Optional[float],
     centroid_vel_pps: Optional[float],
+    action_logits: Optional[ActionLogits] = None,
+    action_confidence_threshold: float = 0.55,
 ) -> PoseSignature:
     """Combine the detector class with the pose-feature triple.
 
@@ -50,8 +53,30 @@ def pose_signature(
     collapse where the subject's last conscious motion is to drop into a
     seated position. The actual escalation decision is still made by the
     classifier in ``tiers.py`` once accel/HR are folded in.
+
+    When ``action_logits`` is provided (TSSTG temporal head), it
+    overrides the static detector class in two cases:
+
+    1. ``action_logits.stable_label`` is set (i.e. the temporal head has
+       held the same label for ``hysteresis_min_consecutive`` predictions
+       in a row) -> use the stable label. This is the production path.
+    2. No stable label yet, but the raw argmax probability is at least
+       ``action_confidence_threshold`` -> use the raw argmax. Useful for
+       the warm-up window before hysteresis settles.
+
+    The temporal head's 4 classes are byte-compatible with the detector
+    classes (``fallen``, ``falling``, ``stand``, ``sitting``), so the
+    rest of the function is unchanged.
     """
-    cls = (detector_class or "").lower()
+    effective_class = detector_class
+    if action_logits is not None:
+        if action_logits.stable_label is not None:
+            effective_class = action_logits.stable_label
+        else:
+            ax = action_logits.argmax_label
+            if action_logits.confidence_of(ax) >= action_confidence_threshold:
+                effective_class = ax
+    cls = (effective_class or "").lower()
     if cls == "fallen":
         if (torso_angle_deg is not None and torso_angle_deg < 30
                 and (aspect_ratio is None or aspect_ratio < 1.0)):

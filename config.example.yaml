@@ -24,7 +24,10 @@ detector:
 
 pose:
   enabled: true
-  weights: yolov8n-pose.pt # auto-downloaded pretrained COCO weights
+  weights: yolov8s-pose.pt # 13 MB, COCO val AP ~60. Auto-downloads on first use.
+                           # Use yolov8n-pose.pt (~6 MB, AP ~50) on very limited
+                           # hardware, or yolov8m-pose.pt (~25 MB, AP ~66) for
+                           # higher keypoint accuracy at the cost of FPS.
   conf: 0.5
   imgsz: 640
   device: auto
@@ -42,6 +45,18 @@ temporal:
   sequence_length: 30      # TSSTG expects 30-frame clips
   image_width: 1280        # used to normalise keypoint coords; should match camera.width
   image_height: 720
+
+  # --- Output stabilisation (Phase 2) -- damps the 1-2 s oscillation
+  # between sitting and falling that appeared at posture transitions
+  # in live testing. Lower alpha = smoother / more latency; higher
+  # min_consecutive = more confident `stable_label` but slower latch.
+  smoothing_alpha: 0.4
+  hysteresis_min_consecutive: 3
+  # Minimum smoothed-argmax confidence required for the temporal head
+  # to override the per-frame detector when no `stable_label` is set
+  # yet (warm-up window). Production path goes through `stable_label`
+  # which has no threshold.
+  action_confidence_threshold: 0.55
 
 wristband:
   # Transport: BLE was abandoned for stability; the ESP32 now opens a TCP

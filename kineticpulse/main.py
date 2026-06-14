@@ -37,6 +37,7 @@ from kineticpulse.fusion.tiers import EmergencyTier
 from kineticpulse.sensors import build_sensor_client
 from kineticpulse.sensors.parser import SensorEvent
 from kineticpulse.temporal.stgcn import KeypointRingBuffer, TemporalHead
+from kineticpulse.temporal.types import ActionLogits
 from kineticpulse.utils.logging import configure_logging, get_logger
 from kineticpulse.utils.timing import now_ms
 from kineticpulse.vision.capture import Frame, build_source
@@ -89,6 +90,7 @@ async def _vision_worker(
     pose: Optional[PoseEstimator],
     detections_q: "asyncio.Queue[Detection]",
     features_q: "asyncio.Queue[PoseFeatures]",
+    actions_q: "asyncio.Queue[ActionLogits]",
     stop: asyncio.Event,
     no_camera: bool,
 ) -> None:
@@ -147,7 +149,24 @@ async def _vision_worker(
             except asyncio.QueueFull:
                 pass
 
-            _ = temporal_head.maybe_predict(keypoint_buffer, features, frame.timestamp_ms)
+            action = temporal_head.maybe_predict(
+                keypoint_buffer, features, frame.timestamp_ms,
+            )
+            if action is not None:
+                try:
+                    actions_q.put_nowait(action)
+                except asyncio.QueueFull:
+                    # Drop the oldest queued action so the engine stays
+                    # near-real-time. The temporal head runs on a stride
+                    # so dropped frames are safe.
+                    try:
+                        _ = actions_q.get_nowait()
+                    except asyncio.QueueEmpty:
+                        pass
+                    try:
+                        actions_q.put_nowait(action)
+                    except asyncio.QueueFull:
+                        pass
     finally:
         source.stop()
         executor.shutdown(wait=False)
@@ -240,6 +259,7 @@ async def run(args: argparse.Namespace) -> int:
 
     detections_q: "asyncio.Queue[Detection]" = asyncio.Queue(maxsize=8)
     features_q: "asyncio.Queue[PoseFeatures]" = asyncio.Queue(maxsize=8)
+    actions_q: "asyncio.Queue[ActionLogits]" = asyncio.Queue(maxsize=8)
     sensor_q: "asyncio.Queue[SensorEvent]" = asyncio.Queue(maxsize=512)
     snapshots_q: "asyncio.Queue[FusionSnapshot]" = asyncio.Queue(maxsize=16)
     stop = asyncio.Event()
@@ -275,6 +295,7 @@ async def run(args: argparse.Namespace) -> int:
         features=features_q,
         sensor_events=sensor_q,
         snapshots=snapshots_q,
+        actions=actions_q,
     )
 
     loop = asyncio.get_event_loop()
@@ -289,7 +310,7 @@ async def run(args: argparse.Namespace) -> int:
         asyncio.create_task(sensors.run(), name="sensors"),
         asyncio.create_task(fusion.run(), name="fusion"),
         asyncio.create_task(_vision_worker(
-            cfg, detector, pose, detections_q, features_q, stop, args.no_camera,
+            cfg, detector, pose, detections_q, features_q, actions_q, stop, args.no_camera,
         ), name="vision"),
         asyncio.create_task(_dispatch_worker(cfg, snapshots_q, args, stop), name="dispatch"),
     ]

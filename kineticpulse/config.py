@@ -36,7 +36,12 @@ class DetectorConfig:
 @dataclass
 class PoseConfig:
     enabled: bool = True
-    weights: str = "yolov8n-pose.pt"  # auto-downloaded pretrained COCO weights
+    # YOLOv8s-pose: 13 MB, COCO val AP ~60 (vs ~50 for the n-variant).
+    # Live testing showed the per-frame keypoint quality of the n-variant
+    # was the secondary contributor to action-classifier oscillation; the
+    # s-variant is a one-line upgrade that is byte-compatible with our
+    # ultralytics wrapper and the COCO-17 -> coco_cut adapter.
+    weights: str = "yolov8s-pose.pt"  # auto-downloaded pretrained COCO weights
     conf: float = 0.5
     imgsz: int = 640
     device: str = "auto"
@@ -61,6 +66,17 @@ class TemporalConfig:
     sequence_length: int = 30         # TSSTG checkpoint was trained on 30-frame clips
     image_width: int = 1280           # used to normalise keypoint coords; matches CameraConfig
     image_height: int = 720
+
+    # --- Output stabilisation (Phase 2 -- live spot check showed 1-2 s
+    # oscillation between sitting and falling around posture transitions).
+    # `smoothing_alpha` is the EMA weight on the new prediction (0.0 =
+    # ignore new, 1.0 = no smoothing); `hysteresis_min_consecutive` is the
+    # number of stride-spaced predictions a candidate label must hold
+    # before it becomes the published `stable_label` consumed by the
+    # fusion engine.
+    smoothing_alpha: float = 0.4
+    hysteresis_min_consecutive: int = 3
+    action_confidence_threshold: float = 0.55  # min prob to override the static detector
 
 
 @dataclass
