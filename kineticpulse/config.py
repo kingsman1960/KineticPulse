@@ -44,9 +44,23 @@ class PoseConfig:
 
 @dataclass
 class TemporalConfig:
+    """Temporal action-classifier (TSSTG / two-stream ST-GCN) settings.
+
+    Holds both the keypoint ring-buffer parameters and the inference-
+    side knobs that ``TsstgClassifier`` needs (weights path, device,
+    sequence length, source image size for coordinate normalisation).
+    The default ``weights`` path is where ``docs/MANUAL.md`` instructs
+    operators to drop the released ``tsstg-model.pth`` checkpoint.
+    """
+
     enabled: bool = True
     window_size: int = 60             # frames in the keypoint ring buffer (~2 s @ 30 FPS)
     stride: int = 5                   # run temporal head every N frames
+    weights: str = "models/tsstg/tsstg-model.pth"
+    device: str = "auto"              # auto | cpu | cuda | cuda:0 ...
+    sequence_length: int = 30         # TSSTG checkpoint was trained on 30-frame clips
+    image_width: int = 1280           # used to normalise keypoint coords; matches CameraConfig
+    image_height: int = 720
 
 
 @dataclass

@@ -178,13 +178,57 @@ fire?" cooldown lives in `kineticpulse/main.py`'s dispatch worker.
 | [payload.py](../kineticpulse/alerts/payload.py) | Build the JSON payload sent to webhooks. PRD §2.3 fields: subject ID, location, nature, scenario, severity, vitals, detector. |
 | [webhooks.py](../kineticpulse/alerts/webhooks.py) | Async `httpx` dispatcher. Sends to every enabled webhook in parallel with a 5 s timeout; failures are logged, never raised. |
 
-### 3.7 `kineticpulse.temporal` (stub)
+### 3.7 `kineticpulse.temporal` (TSSTG action classifier)
 
-[stgcn.py](../kineticpulse/temporal/stgcn.py) is a deterministic
-pass-through implementation of an ST-GCN-style action head. When we
-have temporal-keypoint fall data, the only file that changes is this
-one — the orchestrator and fusion engine are unaffected because the
-interface is fixed.
+Temporal action recognition over a rolling window of pose keypoints.
+The architecture is **two-stream Spatial-Temporal Graph CNN**
+(GajuuzZ/Human-Falling-Detect-Tracks lineage), wired together so the
+released `tsstg-model.pth` checkpoint loads byte-compatibly with
+`strict=True`.
+
+| File | Purpose |
+|---|---|
+| [graph.py](../kineticpulse/temporal/graph.py) | The `coco_cut` 14-joint skeleton graph (3 spatial partitions). |
+| [stgcn_model.py](../kineticpulse/temporal/stgcn_model.py) | `GraphConvolution` / `StGcnBlock` / `StreamSpatialTemporalGraph` / `TwoStreamSpatialTemporalGraph` — pure architecture, no weights bundled. |
+| [keypoint_adapter.py](../kineticpulse/temporal/keypoint_adapter.py) | Re-indexes COCO-17 (YOLOv8n-pose) → coco_cut 14, synthesising the neck joint at the shoulder midpoint. |
+| [tsstg.py](../kineticpulse/temporal/tsstg.py) | `TsstgClassifier`: lazy-loads the checkpoint, normalises a 30-frame clip, runs the two-stream forward, collapses the 7-class sigmoid output to KineticPulse's 4-class schema. |
+| [stgcn.py](../kineticpulse/temporal/stgcn.py) | `TemporalHead` (the public surface). Uses TSSTG when weights are present, falls back to a deterministic posture heuristic otherwise. Also defines `ActionLogits` and `KeypointRingBuffer`. |
+
+**Class collapse (7 → 4).** TSSTG outputs sigmoid probabilities for
+`Standing, Walking, Sitting, Lying Down, Stand up, Sit down, Fall Down`.
+We map them as:
+
+* `fallen`  ← `Lying Down`
+* `falling` ← `Fall Down`
+* `stand`   ← `max(Standing, Walking, Stand up)`
+* `sitting` ← `max(Sitting, Sit down)`
+
+The four numbers are then renormalised to sum to 1 so callers can treat
+them as a probability distribution.
+
+**Setup** (one-time per workstation / Jetson):
+
+1. Download `tsstg-model.pth` per the instructions in
+   [`models/tsstg/README.md`](../models/tsstg/README.md). The file is
+   ~24 MB and is not redistributed in this repo.
+2. Place it at `models/tsstg/tsstg-model.pth` (the default
+   `temporal.weights` path).
+3. Smoke-check it loads:
+
+   ```bash
+   set KMP_DUPLICATE_LIB_OK=TRUE
+   python scripts/live_predict.py --camera 0 --backend DSHOW \
+                                  --use-action-classifier
+   ```
+
+   The OSD shows the dominant action (`stand` / `sitting` / `falling`
+   / `fallen`) plus the full 4-way distribution and the ring-buffer
+   fill percentage. Console prints the dominant class once per second.
+
+If the weights file is missing, `TemporalHead` logs a single
+`WARNING` and falls back to a deterministic posture heuristic over the
+PoseFeatures triple — so unit tests, CI and any deployment that has
+not yet downloaded the weights keep running end-to-end.
 
 ### 3.8 `kineticpulse.webrtc` (stub)
 
@@ -630,18 +674,51 @@ in deployment.
 The orchestrator's `await webrtc.start(snapshot)` call site won't
 change.
 
-### 8.4 Temporal fall-clip dataset arrives
+### 8.4 Wire `ActionLogits` into the fusion engine
 
-**File to change:**
-- [kineticpulse/temporal/stgcn.py](../kineticpulse/temporal/stgcn.py) →
-  replace the heuristic in `TemporalHead.maybe_predict()` with a real
-  ST-GCN forward pass on the keypoint ring buffer. Add the training
-  script as `scripts/train_temporal.py`.
+The TSSTG action classifier already produces 4-class
+`ActionLogits` (see §3.7), but the current `FusionEngine` does not
+consume them yet — it still derives `PoseSignature` from the
+per-frame YOLO detector class plus pose features. To upgrade the
+engine to use the temporal head:
 
-The fusion engine doesn't care — it never reads `ActionLogits` directly
-in the current implementation. Once you have a trained head, you can
-either consume its output from the engine or use it to gate the rule
-engine's `pose_signature` confidence.
+**Files to change:**
+
+- [kineticpulse/main.py](../kineticpulse/main.py) → push every new
+  `ActionLogits` produced by `TemporalHead.maybe_predict()` into a
+  bounded queue, alongside the existing `detections` and `features`
+  queues.
+- [kineticpulse/fusion/engine.py](../kineticpulse/fusion/engine.py) →
+  add an `_ingest_actions` task that records the latest
+  `ActionLogits`; pass it into `_build_snapshot()` so the engine can
+  prefer the temporal class over the static detector when the
+  temporal head is confident.
+- [kineticpulse/fusion/rules.py](../kineticpulse/fusion/rules.py) →
+  optional: gate `pose_signature` so that an `ActionLogits.argmax_label`
+  of `falling` / `fallen` boosts the signature even if the static
+  detector disagrees.
+
+This is intentionally split into a separate phase because it changes
+the engine's input contract; the action classifier is already useful
+standalone via `scripts/live_predict.py --use-action-classifier`.
+
+### 8.5 Fine-tune TSSTG on environment data
+
+If the released checkpoint mis-classifies your specific setup
+(camera angle, room layout, subject demographics), the fix is data,
+not architecture. Add training and dataset scripts:
+
+- `scripts/extract_keypoints.py` — given annotated video clips, run
+  YOLOv8n-pose, convert to coco_cut 14, save as `.npz` per-clip
+  alongside the action label.
+- `scripts/train_temporal.py` — load `kineticpulse.temporal.stgcn_model
+  .TwoStreamSpatialTemporalGraph`, optionally initialise from
+  `models/tsstg/tsstg-model.pth`, train against your `.npz` clips,
+  save the new weights into `models/tsstg/`.
+
+Because the architecture in `stgcn_model.py` is byte-compatible with
+the upstream, any checkpoint trained this way drops back into
+`temporal.weights` without code changes.
 
 ---
 

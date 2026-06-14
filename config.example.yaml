@@ -30,9 +30,18 @@ pose:
   device: auto
 
 temporal:
+  # Action classifier (TSSTG / two-stream ST-GCN). When the weights below
+  # are present we use the real model; otherwise the head silently falls
+  # back to a posture-feature heuristic so dev environments still run.
+  # See docs/MANUAL.md for the tsstg-model.pth download instructions.
   enabled: true
-  window_size: 60          # frames (~2 s @ 30 FPS)
+  weights: models/tsstg/tsstg-model.pth
+  device: auto             # auto | cpu | cuda | cuda:0 ...
+  window_size: 60          # frames in the keypoint ring buffer (~2 s @ 30 FPS)
   stride: 5                # run temporal head every N frames
+  sequence_length: 30      # TSSTG expects 30-frame clips
+  image_width: 1280        # used to normalise keypoint coords; should match camera.width
+  image_height: 720
 
 wristband:
   # Transport: BLE was abandoned for stability; the ESP32 now opens a TCP

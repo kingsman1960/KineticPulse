@@ -18,6 +18,12 @@ matplotlib>=3.7.0           # confusion matrix + eval plots
 onnx>=1.15.0
 onnxruntime>=1.16.0         # CPU/GPU ONNX inference (laptop dev)
 
+# --- Action classifier (TSSTG / two-stream ST-GCN) ----------------------
+# torch is also pulled in transitively by ultralytics; named explicitly here
+# so kineticpulse.temporal.tsstg has a hard, declared dependency. Use the
+# +cu* wheel matching your CUDA on the deployment target (Jetson or laptop).
+torch>=2.0.0
+
 # --- Pipeline 2 runtime ------------------------------------------------
 httpx[http2]>=0.25.0        # async webhook dispatcher
 bleak>=0.21.0               # cross-platform BLE client

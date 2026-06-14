@@ -153,7 +153,9 @@ Capture           kineticpulse/vision/capture.py
 Vision            kineticpulse/vision/detector.py    FallDetector (.pt / .onnx / .engine)
                   kineticpulse/vision/pose.py        Pretrained YOLOv8n-pose
                   kineticpulse/vision/features.py    Torso angle, AR, velocity, stillness
-                  kineticpulse/temporal/stgcn.py     ST-GCN STUB (pass-through head)
+                  kineticpulse/temporal/stgcn.py     TemporalHead (TSSTG action classifier + heuristic fallback)
+                  kineticpulse/temporal/tsstg.py     TSSTG checkpoint loader + 7->4 class collapse
+                  kineticpulse/temporal/stgcn_model.py Two-stream ST-GCN architecture
         │
         ▼
 Sensors           kineticpulse/sensors/tcp.py        TcpSensorServer (production path)
@@ -266,7 +268,7 @@ behaviour without any other code change.
 - **Language:** Python 3.9+
 - **Detection model:** YOLOv8s, trained on the unified 4-class dataset (`fallen`, `falling`, `stand`, `sitting`). See [dataset/README.md](dataset/README.md) for the merge schema and the sitting label-noise caveat.
 - **Pose backbone:** YOLOv8n-pose (pretrained COCO keypoints).
-- **Temporal head:** ST-GCN interface (currently a deterministic stub; swap in real weights once a temporal-keypoint dataset exists).
+- **Temporal head:** Two-Stream Spatial-Temporal Graph CNN (TSSTG, GajuuzZ lineage). Loads `models/tsstg/tsstg-model.pth` byte-compatibly with the released checkpoint and collapses its 7-class output (Standing / Walking / Sitting / Lying Down / Stand up / Sit down / Fall Down) onto KineticPulse's 4-class schema. Skeleton input is robust to camera angle and distance — exactly the failure mode the per-frame YOLO detector showed on laptop webcams. Falls back to a posture heuristic when weights are missing. The upstream Google Drive link is dead, so KineticPulse pulls the weights from a community mirror; setup steps are in [models/tsstg/README.md](models/tsstg/README.md).
 - **Speech-to-Text:** `faster-whisper` (CTranslate2-backed Whisper-small.en).
 - **Wristband link:** **TCP/Wi-Fi** (Jetson is the server, ESP32 is the client; newline-delimited JSON). BLE retained as a fallback transport behind `wristband.transport: ble`. A `--mock-ble` synthetic telemetry source bypasses both transports for development without hardware.
 - **Heart-rate processing:** on-Jetson PPG decoder (`kineticpulse.sensors.ppg`) that consumes raw MAX30102 samples streamed from the ESP32 and derives BPM with a dependency-free peak detector. Same code path is used over TCP (parsed from the `{"type":"ppg",...}` payload) and BLE (parsed from the binary characteristic).
@@ -345,7 +347,46 @@ python scripts/export.py --weights runs/detect/kp_v2_4cls/weights/best.pt --form
 python scripts/export.py --weights runs/detect/kp_v2_4cls/weights/best.pt --format engine --half
 ```
 
-### 6. Run the Pipeline 2 runtime
+### 6. (Optional) Fetch the TSSTG action-classifier weights
+
+Pipeline 2 includes a Two-Stream ST-GCN temporal head (TSSTG) that
+classifies actions from a sequence of skeleton keypoints — far more
+robust to camera angle / distance than the per-frame YOLO detector.
+Without weights the runtime falls back to a posture heuristic; with
+weights you get the full action classifier.
+
+The upstream Google Drive link published by GajuuzZ is dead, so we
+download from a community mirror:
+
+```powershell
+pip install gdown
+python -m gdown --folder `
+    "https://drive.google.com/drive/folders/1lrTI56k9QiIfMJhG9kzNjBzJh98KCIIO" `
+    -O models/tsstg/_mirror
+Move-Item models/tsstg/_mirror/TSSTG/tsstg-model.pth models/tsstg/tsstg-model.pth -Force
+Remove-Item -Recurse -Force models/tsstg/_mirror   # optional cleanup
+```
+
+Expected size: 24,708,522 bytes. See [models/tsstg/README.md](models/tsstg/README.md)
+for the full procedure (manual download fallback, verification command,
+checkpoint contents).
+
+### 7. Live spot-check the camera + classifier
+
+Two modes ship with `scripts/live_predict.py` (Windows: `--backend DSHOW`
+recommended for stability):
+
+```bash
+# A) Per-frame YOLOv8 detector overlay - quick sanity check:
+python scripts/live_predict.py --camera 0 --backend DSHOW --apply-priority --show-rule
+
+# B) Pose + TSSTG action classifier (requires the weights from step 6):
+python scripts/live_predict.py --camera 0 --backend DSHOW --use-action-classifier
+```
+
+Press `q` in the preview window to exit.
+
+### 8. Run the Pipeline 2 runtime
 
 ```bash
 cp config.example.yaml config.yaml      # then edit: webhook URLs, wristband MAC, etc.
@@ -353,7 +394,7 @@ cp config.example.yaml config.yaml      # then edit: webhook URLs, wristband MAC
 # Dev laptop - no wristband, no microphone:
 python -m kineticpulse.main --config config.yaml --mock-ble --mock-stt
 
-# Scripted fall scenario from the mock BLE client (great for end-to-end smoke testing):
+# Scripted fall scenario from the mock sensor client (great for end-to-end smoke testing):
 python -m kineticpulse.main --config config.yaml --mock-ble --mock-ble-scenario fall_b_seizure --mock-stt
 
 # Timed run for CI / smoke tests (stops itself after N seconds):
@@ -363,13 +404,23 @@ python -m kineticpulse.main --config config.yaml --mock-ble --mock-stt --no-came
 python -m kineticpulse.main --config config.yaml
 ```
 
-### 7. Run the unit tests
+### 9. Run the unit tests
 
 ```bash
 python -m pytest tests/ -v
 ```
 
-41 tests cover: pose-feature math, one test per PRD §5 scenario (A/B/C/D), HR-only degradation paths (no IMU yet), the MAX30102 raw-PPG decoder + on-Jetson BPM estimator at 55/72/95/130 BPM, a detector-on-real-image smoke check (skipped when weights are absent), four direct tests of the TCP sensor server (HR/accel/PulseLost decoding, malformed-input recovery, reconnection, raw-PPG passthrough), and three end-to-end orchestrator smoke runs — two through the mock sensor source and one through a **real TCP loopback** that drives the full async pipeline.
+**68 tests** cover:
+
+- **Pose-feature math** (14) — torso angle, AR, velocity, stillness primitives.
+- **Fusion / PRD §5 scenarios** (7) — one happy path per scenario A/B/C/D plus HR-only degradation paths (no-IMU regime).
+- **MAX30102 PPG decoder** (10) — raw-FIFO unpack + on-Jetson BPM estimator at 55 / 72 / 95 / 130 BPM.
+- **TCP sensor server** (4) — HR / accel / `pulse_lost` decoding, malformed-input recovery, reconnection, raw-PPG passthrough.
+- **Detector smoke** (1) — runs `FallDetector` on a real image, skipped when no weights.
+- **Pipeline smoke** (3) — end-to-end orchestrator runs (two via the mock sensor source, one via a **real TCP loopback** that drives the full async pipeline).
+- **Posture post-processor** (priority rules used by `live_predict.py`) — `sitting` / `falling` / `fallen` rescue from `stand` suppression, IoU grouping.
+- **Temporal subsystem** (graph builder, COCO-17 → coco_cut adapter, two-stream forward pass, `ActionLogits` schema, `TemporalHead` heuristic fallback when weights are absent).
+- **Webhook dispatcher** (6) — disabled-webhook short-circuit, header / payload contract, parallel fan-out, single-failure isolation, lazy client lifecycle.
 
 ---
 
@@ -384,9 +435,14 @@ KineticPulse/
 │   │   ├── capture.py           # USB / CSI / RTSP / file source + bounded frame queue
 │   │   ├── detector.py          # FallDetector (.pt / .onnx / .engine backends)
 │   │   ├── pose.py              # pretrained YOLOv8n-pose wrapper
-│   │   └── features.py          # torso angle, AR, velocity, stillness
+│   │   ├── features.py          # torso angle, AR, velocity, stillness
+│   │   └── posture_postprocess.py  # priority rules: rescue sitting/fallen/falling from stand suppression
 │   ├── temporal/
-│   │   └── stgcn.py             # ST-GCN STUB (pass-through; swap for real weights later)
+│   │   ├── stgcn.py             # TemporalHead - selects TSSTG or heuristic; KeypointRingBuffer; ActionLogits
+│   │   ├── stgcn_model.py       # Two-stream ST-GCN architecture (matches tsstg-model.pth state_dict)
+│   │   ├── tsstg.py             # TsstgClassifier - loads checkpoint, runs inference, collapses 7->4 classes
+│   │   ├── keypoint_adapter.py  # COCO-17 (YOLOv8-pose) -> coco_cut 14 (with synthetic neck)
+│   │   └── graph.py             # coco_cut skeleton graph + spatial / distance / uniform partitioning
 │   ├── sensors/
 │   │   ├── tcp.py               # TcpSensorServer - JSON-lines wristband stream (production)
 │   │   ├── ble.py               # bleak BLE client (legacy / fallback transport)
@@ -413,16 +469,29 @@ KineticPulse/
 │   ├── merge_datasets.py        # 3-dataset merge + dHash dedup (Option A schema)
 │   ├── train.py                 # YOLOv8 training driver
 │   ├── eval.py                  # per-class metrics + confusion matrix
-│   └── export.py                # ONNX (always) + TensorRT engine (Jetson)
+│   ├── export.py                # ONNX (always) + TensorRT engine (Jetson)
+│   └── live_predict.py          # webcam spot-check: detector overlay or pose+TSSTG action classifier
 ├── configs/
 │   └── train.yaml               # training hyperparameters
-├── tests/
-│   ├── test_features.py         # pose math (14 tests)
-│   ├── test_fusion_rules.py     # PRD section 5 scenarios + HR-only degradation (7 tests)
-│   └── test_ppg.py              # MAX30102 raw decoder + BPM estimator (10 tests)
+├── tests/                       # 68 tests total
+│   ├── test_features.py             # pose math (14)
+│   ├── test_fusion_rules.py         # PRD section 5 scenarios + HR-only degradation (7)
+│   ├── test_ppg.py                  # MAX30102 raw decoder + BPM estimator (10)
+│   ├── test_tcp_sensor.py           # TcpSensorServer decoders + reconnection (4)
+│   ├── test_detector_smoke.py       # FallDetector on a real image (auto-skipped when no weights)
+│   ├── test_pipeline_smoke.py       # end-to-end orchestrator + real TCP loopback (3)
+│   ├── test_posture_postprocess.py  # sitting/falling/fallen rescue priority rules
+│   ├── test_temporal_stgcn.py       # graph, COCO-17 adapter, two-stream forward, TemporalHead fallback
+│   └── test_webhooks.py             # async httpx dispatcher (6)
+├── models/
+│   └── tsstg/
+│       ├── README.md            # how to fetch tsstg-model.pth (community mirror)
+│       └── tsstg-model.pth      # gitignored, 24.7 MB, see Getting Started step 6
 ├── dataset/
 │   ├── README.md                # source datasets, unified schema, merge rationale
 │   └── _merged/                 # generated, gitignored
+├── docs/
+│   └── MANUAL.md                # developer manual (repo map, module guide, cookbook, PR checklist)
 ├── config.example.yaml          # runtime config template
 ├── requirements.txt
 └── README.md
@@ -452,7 +521,8 @@ KineticPulse/
 - [x] Unit tests: pose math + one per PRD scenario
 - [ ] Train + report a first checkpoint on `dataset/_merged` (Phase 1 deliverable)
 - [ ] CSI / RTSP camera bring-up on a real Jetson Orin Nano
-- [ ] ST-GCN replacement once a temporal-keypoint dataset is available
+- [x] Two-stream ST-GCN action classifier (TSSTG) integrated + weights in place (community-mirrored `tsstg-model.pth`); live spot-check via `scripts/live_predict.py --use-action-classifier` works
+- [ ] Wire `ActionLogits` into the fusion engine (replace heuristic posture features) and fine-tune TSSTG on KineticPulse-flavoured clips (see MANUAL §8.4)
 - [ ] WebRTC peer + caregiver dashboard
 - [ ] ESP32 wristband firmware (IMU + PPG HR + **TCP client emitting JSON lines per the schema in [Hardware Status](#hardware-status)**)
 - [ ] Battery-life optimization pass on the wristband
