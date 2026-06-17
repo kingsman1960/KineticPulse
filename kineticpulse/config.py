@@ -11,6 +11,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from kineticpulse.webrtc.types import IceServerConfig
+
 
 @dataclass
 class CameraConfig:
@@ -161,6 +163,16 @@ class WebrtcConfig:
     enabled: bool = False
     signaling_url: Optional[str] = None
     always_on: bool = False            # if True, stream a continuous low-bitrate preview
+    auth_token: Optional[str] = None
+    session_id_prefix: str = "kp"
+    connect_timeout_s: float = 8.0
+    reconnect_backoff_s: float = 3.0
+    max_session_s: float = 120.0
+    enable_audio: bool = False
+    video_bitrate_kbps: int = 1200
+    ice_servers: List[IceServerConfig] = field(default_factory=lambda: [
+        IceServerConfig(urls=["stun:stun.l.google.com:19302"]),
+    ])
 
 
 @dataclass
@@ -213,6 +225,25 @@ def load_config(path: Path) -> RuntimeConfig:
         webhooks=webhooks,
     )
 
+    webrtc_raw = raw.get("webrtc") or {}
+    ice_servers_raw = webrtc_raw.get("ice_servers") or []
+    ice_servers = []
+    for entry in ice_servers_raw:
+        if not isinstance(entry, dict):
+            continue
+        urls = entry.get("urls")
+        if isinstance(urls, str):
+            urls = [urls]
+        if not isinstance(urls, list) or not urls:
+            continue
+        ice_servers.append(IceServerConfig(
+            urls=[str(u) for u in urls],
+            username=entry.get("username"),
+            credential=entry.get("credential"),
+        ))
+    if not ice_servers:
+        ice_servers = [IceServerConfig(urls=["stun:stun.l.google.com:19302"])]
+
     cfg = RuntimeConfig(
         camera=_from_dict(CameraConfig, raw.get("camera")),
         detector=_from_dict(DetectorConfig, raw.get("detector")),
@@ -222,7 +253,12 @@ def load_config(path: Path) -> RuntimeConfig:
         thresholds=_from_dict(ThresholdsConfig, raw.get("thresholds")),
         voice=_from_dict(VoiceConfig, raw.get("voice")),
         alerts=alerts,
-        webrtc=_from_dict(WebrtcConfig, raw.get("webrtc")),
+        webrtc=WebrtcConfig(
+            **{
+                **_from_dict(WebrtcConfig, webrtc_raw).__dict__,
+                "ice_servers": ice_servers,
+            }
+        ),
         logging=_from_dict(LoggingConfig, raw.get("logging")),
     )
     return cfg

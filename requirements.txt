@@ -29,6 +29,9 @@ httpx[http2]>=0.25.0        # async webhook dispatcher
 bleak>=0.21.0               # cross-platform BLE client
 sounddevice>=0.4.6          # microphone capture (Phase 2 voice)
 pyttsx3>=2.90               # offline TTS for prompts (cross-platform)
+websockets>=11.0            # signaling WebSocket client/server
+aiortc>=1.7.0               # WebRTC peer
+av>=11.0.0                  # PyAV frames for aiortc tracks
 
 # --- Tests --------------------------------------------------------------
 pytest>=7.4.0
@@ -39,5 +42,5 @@ pytest-asyncio>=0.21.0
 # pycuda                    # for TRT engine bindings on Jetson
 # ctranslate2>=4.0.0        # Whisper-small.en local STT, CUDA build on Jetson
 # faster-whisper>=1.0.0     # CT2-based Whisper wrapper
-# aiortc>=1.6.0             # WebRTC peer (pulls heavy native deps)
-# av>=11.0.0                # PyAV, required by aiortc
+# aiortc>=1.7.0             # use this line instead on constrained Jetson builds
+# av>=11.0.0                # use this line instead on constrained Jetson builds

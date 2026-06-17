@@ -126,8 +126,25 @@ alerts:
 
 webrtc:
   enabled: false
-  signaling_url: null
+  signaling_url: "wss://your-signaling.example/ws"
+  auth_token: "REPLACE_ME_LONG_RANDOM_TOKEN"
+  session_id_prefix: "kp"
   always_on: false
+  connect_timeout_s: 8.0
+  reconnect_backoff_s: 3.0
+  max_session_s: 120.0
+  enable_audio: false
+  video_bitrate_kbps: 1200
+  # Add TURN for internet reliability. For coturn static-secret or long-term
+  # credentials, include username + credential.
+  ice_servers:
+    - urls:
+        - "stun:stun.l.google.com:19302"
+    - urls:
+        - "turn:turn.your-domain.com:3478?transport=udp"
+        - "turn:turn.your-domain.com:3478?transport=tcp"
+      username: "caregiver"
+      credential: "REPLACE_ME"
 
 logging:
   level: INFO              # DEBUG | INFO | WARNING | ERROR

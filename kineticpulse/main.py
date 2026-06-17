@@ -18,6 +18,7 @@ import asyncio
 import io
 import signal
 import sys
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Optional
@@ -48,6 +49,7 @@ from kineticpulse.voice.prompts import PromptPlayer
 from kineticpulse.voice.safe_words import VoiceVerdict, classify_response
 from kineticpulse.voice.stt import build_stt
 from kineticpulse.webrtc.peer import WebrtcPeer
+from kineticpulse.webrtc.types import WebrtcSessionMeta
 
 log = get_logger("kineticpulse.main")
 
@@ -186,12 +188,28 @@ async def _dispatch_worker(
     dispatcher = WebhookDispatcher(cfg.alerts.webhooks)
     prompt_player = PromptPlayer()
     stt = build_stt(cfg.voice, mock=args.mock_stt, mock_response=args.mock_stt_response)
-    webrtc = WebrtcPeer(cfg.webrtc)
+    webrtc = WebrtcPeer(
+        cfg.webrtc,
+        camera_cfg=cfg.camera,
+        subject_id=cfg.alerts.subject_id,
+        location=cfg.alerts.location,
+    )
 
     cooldown_ms = 8_000           # do not retrigger Tier 1 within this window
     last_tier_at_ms = 0
 
     try:
+        async def _safe_webrtc_start(*, snap: FusionSnapshot, session_id: str, session_meta: WebrtcSessionMeta) -> None:
+            if not cfg.webrtc.enabled:
+                return
+            try:
+                await asyncio.wait_for(
+                    webrtc.start(snap, session_id=session_id, session_meta=session_meta),
+                    timeout=max(1.0, cfg.webrtc.connect_timeout_s + 1.0),
+                )
+            except Exception as exc:
+                log.warning("WebRTC startup failed (session=%s): %s", session_id, exc)
+
         while not stop.is_set():
             try:
                 snap: FusionSnapshot = await asyncio.wait_for(snapshots_q.get(), timeout=1.0)
@@ -209,10 +227,23 @@ async def _dispatch_worker(
                         tier.value, snap.decision.scenario, snap.decision.reason)
 
             if tier.bypasses_voice:
-                payload = build_payload(cfg.alerts, snap)
+                session_id = f"{cfg.webrtc.session_id_prefix}-{uuid.uuid4().hex[:12]}"
+                payload = build_payload(cfg.alerts, snap, session_id=session_id)
+                session_meta = WebrtcSessionMeta(
+                    session_id=session_id,
+                    timestamp_ms=snap.timestamp_ms,
+                    tier=tier.value,
+                    scenario=snap.decision.scenario,
+                    subject_id=cfg.alerts.subject_id,
+                    location=cfg.alerts.location,
+                    reason=snap.decision.reason,
+                    detector_class=snap.detector_class,
+                    action_class=snap.action_class,
+                    action_confidence=snap.action_conf,
+                )
                 await asyncio.gather(
                     dispatcher.dispatch(payload),
-                    webrtc.start(snap),
+                    _safe_webrtc_start(snap=snap, session_id=session_id, session_meta=session_meta),
                 )
                 continue
 
@@ -236,10 +267,26 @@ async def _dispatch_worker(
                 "verdict": verdict.value,
                 "matched_phrase": matched,
             }
-            payload = build_payload(cfg.alerts, snap, voice_extra=voice_extra)
+            session_id = f"{cfg.webrtc.session_id_prefix}-{uuid.uuid4().hex[:12]}"
+            payload = build_payload(
+                cfg.alerts, snap, voice_extra=voice_extra, session_id=session_id
+            )
+            session_meta = WebrtcSessionMeta(
+                session_id=session_id,
+                timestamp_ms=snap.timestamp_ms,
+                tier=tier.value,
+                scenario=snap.decision.scenario,
+                subject_id=cfg.alerts.subject_id,
+                location=cfg.alerts.location,
+                reason=snap.decision.reason,
+                detector_class=snap.detector_class,
+                action_class=snap.action_class,
+                action_confidence=snap.action_conf,
+                extra={"voice_verdict": verdict.value},
+            )
             await asyncio.gather(
                 dispatcher.dispatch(payload),
-                webrtc.start(snap),
+                _safe_webrtc_start(snap=snap, session_id=session_id, session_meta=session_meta),
             )
     finally:
         await dispatcher.aclose()

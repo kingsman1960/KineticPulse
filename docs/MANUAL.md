@@ -230,11 +230,16 @@ If the weights file is missing, `TemporalHead` logs a single
 PoseFeatures triple — so unit tests, CI and any deployment that has
 not yet downloaded the weights keep running end-to-end.
 
-### 3.8 `kineticpulse.webrtc` (stub)
+### 3.8 `kineticpulse.webrtc`
 
-[peer.py](../kineticpulse/webrtc/peer.py) exposes the `start` / `stop`
-async interface the orchestrator calls, but the real `aiortc` peer is
-not yet wired (pending signaling-server design).
+[peer.py](../kineticpulse/webrtc/peer.py) now runs a real `aiortc`
+publisher with authenticated WebSocket signaling. The module includes:
+
+- `peer.py` — peer lifecycle (`start` / `stop`), offer/answer/ICE wiring,
+  bounded startup timeout, safe fallback on dependency/network failure.
+- `signaling_client.py` — JSON-over-WS client used by Jetson.
+- `tracks.py` — OpenCV camera -> `VideoStreamTrack`.
+- `types.py` — ICE/session metadata dataclasses (`WebrtcSessionMeta`).
 
 ### 3.9 `kineticpulse.utils`
 
@@ -263,7 +268,7 @@ sequenceDiagram
     participant Disp as Dispatch worker<br/>(main.py)
     participant Voice as VoicePrompt / STT<br/>(voice/)
     participant Hook as WebhookDispatcher<br/>(webhooks.py)
-    participant RTC as WebrtcPeer (stub)
+    participant RTC as WebrtcPeer (aiortc)
 
     Cam->>Det: Frame
     Cam->>Pose: Frame
@@ -584,8 +589,7 @@ python -m pytest tests/test_tcp_sensor.py -v                    # focus on the T
   smoke-test manually with `--no-camera` removed.
 - The webhook dispatcher — needs an HTTP server fixture; add when the
   first webhook integration ships.
-- WebRTC — currently a stub; replace when the signaling-server design
-  lands.
+- Full media e2e without dependencies (`aiortc`/`av`) installed.
 
 When you ship a feature with non-trivial logic, **add a unit test for the
 pure-logic portion** even if the integration is mocked.
@@ -660,19 +664,16 @@ degradation tests should still pass — they're verifying the *no-accel*
 behavior is still safe; they don't depend on accel actually being absent
 in deployment.
 
-### 8.3 Dashboard / signaling server lands
+### 8.3 Dashboard / signaling server lands (DONE baseline)
 
-**Files to change:**
-- [kineticpulse/webrtc/peer.py](../kineticpulse/webrtc/peer.py) →
-  replace the stub with a real `aiortc` peer that publishes a video
-  track from the same webcam.
-- [requirements.txt](../requirements.txt) → uncomment `aiortc>=1.6.0`
-  and `av>=11.0.0`.
-- [config.example.yaml](../config.example.yaml) → set
-  `webrtc.signaling_url`.
-
-The orchestrator's `await webrtc.start(snapshot)` call site won't
-change.
+Current baseline includes:
+- Jetson-side `aiortc` peer in [kineticpulse/webrtc/peer.py](../kineticpulse/webrtc/peer.py)
+- Signaling client + typed session metadata in
+  [kineticpulse/webrtc/signaling_client.py](../kineticpulse/webrtc/signaling_client.py)
+  and [kineticpulse/webrtc/types.py](../kineticpulse/webrtc/types.py)
+- Next.js caregiver UI + signaling backend under `dashboard/`
+- TURN deployment templates in `dashboard/deploy/`
+- Rollout gates in [docs/WEBRTC_ROLLOUT.md](./WEBRTC_ROLLOUT.md)
 
 ### 8.4 `ActionLogits` ↔ fusion engine wiring (DONE)
 
@@ -904,7 +905,7 @@ for s in synthetic_samples:
 | `MockSensorClient: scenario=... accel=DISABLED ...` | Mock running in HR-only mode (`has_accelerometer=False`). |
 | `Webhook ... -> ... (200)` | A webhook fired successfully. |
 | `Webhook ... failed: ...` | A webhook is misconfigured; doesn't affect other webhooks or the loop. |
-| `[stub] WebRTC start requested` | WebRTC stub fired (real aiortc not yet wired). |
+| `WebRTC session started: ...` | aiortc peer reached offer/answer setup and session is active. |
 
 ---
 
@@ -1028,7 +1029,7 @@ Before opening a PR, run through this list:
 | Term | Meaning |
 |---|---|
 | **PRD** | Project Requirements Document. Lives in `CPS ideas - Google Docs.pdf`. The system's source of truth for *what* it does. |
-| **Pipeline 2** | The recommended runtime architecture (chosen earlier): YOLOv8s detector + pretrained YOLOv8n-pose + ST-GCN stub + sensor fusion. |
+| **Pipeline 2** | The recommended runtime architecture: YOLOv8s detector + YOLOv8s-pose + TSSTG + sensor fusion + WebRTC escalation path. |
 | **Tier 0 / 1 / 2** | Emergency severity. Tier 0 = dismiss, Tier 1 = verify verbally, Tier 2 = escalate immediately (bypass voice). |
 | **Scenario A / B / C / D** | The four PRD §5 fall scenarios: standard fall / suspected seizure / syncope / false positive. |
 | **Signature** | A coarse enum-valued summary of a modality's recent samples (`PoseSignature`, `AccelSignature`, `HrSignature`). The classifier consumes these, not the raw samples. |

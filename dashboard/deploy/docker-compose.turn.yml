@@ -1,0 +1,14 @@
+version: "3.9"
+
+services:
+  coturn:
+    image: coturn/coturn:4.6.2
+    container_name: kineticpulse-coturn
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./coturn.conf:/etc/coturn/turnserver.conf:ro
+      - ./certs:/etc/coturn/certs:ro
+    command:
+      - -c
+      - /etc/coturn/turnserver.conf

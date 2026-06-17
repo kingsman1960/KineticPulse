@@ -1,5 +1,3 @@
-"""WebRTC peer for caregiver live feed (stub)."""
+"""WebRTC package."""
 
-from kineticpulse.webrtc.peer import WebrtcPeer
-
-__all__ = ["WebrtcPeer"]
+__all__ = ["peer", "types", "signaling_client", "tracks"]

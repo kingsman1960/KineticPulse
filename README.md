@@ -177,7 +177,7 @@ Voice             kineticpulse/voice/prompts.py      pyttsx3 voice prompt player
         ▼
 Alerts            kineticpulse/alerts/payload.py     AlertPayload builder (vitals + scenario)
                   kineticpulse/alerts/webhooks.py    Async httpx dispatcher
-                  kineticpulse/webrtc/peer.py        WebRTC peer STUB (aiortc skeleton)
+                  kineticpulse/webrtc/peer.py        aiortc peer + signaling client (fail-safe)
 ```
 
 Entry point: `kineticpulse/main.py` (run with `python -m kineticpulse.main --config config.yaml`).
@@ -273,7 +273,7 @@ behaviour without any other code change.
 - **Wristband link:** **TCP/Wi-Fi** (Jetson is the server, ESP32 is the client; newline-delimited JSON). BLE retained as a fallback transport behind `wristband.transport: ble`. A `--mock-ble` synthetic telemetry source bypasses both transports for development without hardware.
 - **Heart-rate processing:** on-Jetson PPG decoder (`kineticpulse.sensors.ppg`) that consumes raw MAX30102 samples streamed from the ESP32 and derives BPM with a dependency-free peak detector. Same code path is used over TCP (parsed from the `{"type":"ppg",...}` payload) and BLE (parsed from the binary characteristic).
 - **Wearable firmware:** ESP32 (C/C++ or MicroPython) — currently integrating MAX30102 PPG sensor; IMU pending order. See the [Hardware Status](#hardware-status) section.
-- **Streaming:** WebRTC via `aiortc` (peer + signaling stubbed pending dashboard design).
+- **Streaming:** WebRTC via `aiortc` (Jetson peer + authenticated WebSocket signaling + TURN-capable ICE config). Caregiver dashboard lives under `dashboard/`.
 - **Alerting:** async `httpx` webhook dispatcher (SMS, Slack, 119 / 911 APIs).
 
 ---
@@ -446,7 +446,7 @@ python -m kineticpulse.main --config config.yaml
 python -m pytest tests/ -v
 ```
 
-**82 tests** cover:
+**84 tests** cover:
 
 - **Pose-feature math** (14) — torso angle, AR, velocity, stillness primitives.
 - **Fusion / PRD §5 scenarios** (7) — one happy path per scenario A/B/C/D plus HR-only degradation paths (no-IMU regime).
@@ -500,7 +500,10 @@ KineticPulse/
 │   │   ├── payload.py           # alert payload builder (subject, location, vitals)
 │   │   └── webhooks.py          # async httpx webhook dispatcher
 │   ├── webrtc/
-│   │   └── peer.py              # WebRTC peer STUB (aiortc skeleton)
+│   │   ├── peer.py              # aiortc peer lifecycle (offer/answer/ICE + safe fallback)
+│   │   ├── signaling_client.py  # WebSocket signaling client for Jetson peer
+│   │   ├── tracks.py            # OpenCV camera -> aiortc video track
+│   │   └── types.py             # ICE/session metadata dataclasses
 │   └── utils/
 │       ├── logging.py
 │       └── timing.py
@@ -514,7 +517,7 @@ KineticPulse/
 │   └── train_temporal.py        # TSSTG fine-tune on .npz clips, init from upstream weights
 ├── configs/
 │   └── train.yaml               # training hyperparameters
-├── tests/                       # 82 tests total
+├── tests/                       # 84 tests total
 │   ├── test_features.py                # pose math (14)
 │   ├── test_fusion_rules.py            # PRD section 5 scenarios + HR-only degradation (7)
 │   ├── test_fusion_action_logits.py    # ActionLogits ↔ fusion-engine wiring (8)
@@ -525,7 +528,8 @@ KineticPulse/
 │   ├── test_pipeline_smoke.py          # end-to-end orchestrator + real TCP loopback (3)
 │   ├── test_posture_postprocess.py     # sitting/falling/fallen rescue priority rules
 │   ├── test_temporal_stgcn.py          # graph, COCO-17 adapter, two-stream forward, TemporalHead fallback
-│   └── test_webhooks.py                # async httpx dispatcher (6)
+│   ├── test_webhooks.py                # async httpx dispatcher (6)
+│   └── test_webrtc_config.py           # WebRTC config + ICE server parsing defaults (2)
 ├── models/
 │   └── tsstg/
 │       ├── README.md            # how to fetch tsstg-model.pth (community mirror)
@@ -539,7 +543,9 @@ KineticPulse/
 │       ├── stand/   *.npz
 │       └── sitting/ *.npz
 ├── docs/
-│   └── MANUAL.md                # developer manual (repo map, module guide, cookbook, PR checklist)
+│   ├── MANUAL.md                # developer manual (repo map, module guide, cookbook, PR checklist)
+│   └── WEBRTC_ROLLOUT.md        # production rollout gates (signaling/TURN/reliability)
+├── dashboard/                   # Next.js caregiver UI + signaling server + coturn templates
 ├── config.example.yaml          # runtime config template
 ├── requirements.txt
 └── README.md
@@ -573,7 +579,7 @@ KineticPulse/
 - [x] `ActionLogits` wired into the fusion engine — `pose_signature()` now consumes the temporal head, EMA + hysteresis published as `stable_label`, fusion snapshots carry `action_class` / `action_conf`, alert payload exposes them downstream (see MANUAL §8.4)
 - [x] TSSTG fine-tuning toolchain — `scripts/live_predict.py --record` (live labelling), `scripts/extract_keypoints.py` (video → `.npz` clips), `scripts/train_temporal.py` (BCE fine-tune over the upstream 7-class head with optional `--freeze-backbone`); collection of deployment-domain clips and the actual fine-tune run are still TODO.
 - [ ] Optional: detector → `falling` recall pass — current val recall on `falling` is 0.69; expanding the dataset with mid-fall transition frames is the lowest-hanging fruit on the per-frame side
-- [ ] WebRTC peer + caregiver dashboard
+- [x] WebRTC peer + caregiver dashboard baseline (aiortc Jetson peer, authenticated signaling server, Next.js session viewer, TURN-ready config + rollout checklist)
 - [ ] ESP32 wristband firmware (IMU + PPG HR + **TCP client emitting JSON lines per the schema in [Hardware Status](#hardware-status)**)
 - [ ] Battery-life optimization pass on the wristband
 
