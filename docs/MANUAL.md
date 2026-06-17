@@ -178,19 +178,68 @@ fire?" cooldown lives in `kineticpulse/main.py`'s dispatch worker.
 | [payload.py](../kineticpulse/alerts/payload.py) | Build the JSON payload sent to webhooks. PRD §2.3 fields: subject ID, location, nature, scenario, severity, vitals, detector. |
 | [webhooks.py](../kineticpulse/alerts/webhooks.py) | Async `httpx` dispatcher. Sends to every enabled webhook in parallel with a 5 s timeout; failures are logged, never raised. |
 
-### 3.7 `kineticpulse.temporal` (stub)
+### 3.7 `kineticpulse.temporal` (TSSTG action classifier)
 
-[stgcn.py](../kineticpulse/temporal/stgcn.py) is a deterministic
-pass-through implementation of an ST-GCN-style action head. When we
-have temporal-keypoint fall data, the only file that changes is this
-one — the orchestrator and fusion engine are unaffected because the
-interface is fixed.
+Temporal action recognition over a rolling window of pose keypoints.
+The architecture is **two-stream Spatial-Temporal Graph CNN**
+(GajuuzZ/Human-Falling-Detect-Tracks lineage), wired together so the
+released `tsstg-model.pth` checkpoint loads byte-compatibly with
+`strict=True`.
 
-### 3.8 `kineticpulse.webrtc` (stub)
+| File | Purpose |
+|---|---|
+| [graph.py](../kineticpulse/temporal/graph.py) | The `coco_cut` 14-joint skeleton graph (3 spatial partitions). |
+| [stgcn_model.py](../kineticpulse/temporal/stgcn_model.py) | `GraphConvolution` / `StGcnBlock` / `StreamSpatialTemporalGraph` / `TwoStreamSpatialTemporalGraph` — pure architecture, no weights bundled. |
+| [keypoint_adapter.py](../kineticpulse/temporal/keypoint_adapter.py) | Re-indexes COCO-17 (YOLOv8n-pose) → coco_cut 14, synthesising the neck joint at the shoulder midpoint. |
+| [tsstg.py](../kineticpulse/temporal/tsstg.py) | `TsstgClassifier`: lazy-loads the checkpoint, normalises a 30-frame clip, runs the two-stream forward, collapses the 7-class sigmoid output to KineticPulse's 4-class schema. |
+| [stgcn.py](../kineticpulse/temporal/stgcn.py) | `TemporalHead` (the public surface). Uses TSSTG when weights are present, falls back to a deterministic posture heuristic otherwise. Also defines `ActionLogits` and `KeypointRingBuffer`. |
 
-[peer.py](../kineticpulse/webrtc/peer.py) exposes the `start` / `stop`
-async interface the orchestrator calls, but the real `aiortc` peer is
-not yet wired (pending signaling-server design).
+**Class collapse (7 → 4).** TSSTG outputs sigmoid probabilities for
+`Standing, Walking, Sitting, Lying Down, Stand up, Sit down, Fall Down`.
+We map them as:
+
+* `fallen`  ← `Lying Down`
+* `falling` ← `Fall Down`
+* `stand`   ← `max(Standing, Walking, Stand up)`
+* `sitting` ← `max(Sitting, Sit down)`
+
+The four numbers are then renormalised to sum to 1 so callers can treat
+them as a probability distribution.
+
+**Setup** (one-time per workstation / Jetson):
+
+1. Download `tsstg-model.pth` per the instructions in
+   [`models/tsstg/README.md`](../models/tsstg/README.md). The file is
+   ~24 MB and is not redistributed in this repo.
+2. Place it at `models/tsstg/tsstg-model.pth` (the default
+   `temporal.weights` path).
+3. Smoke-check it loads:
+
+   ```bash
+   set KMP_DUPLICATE_LIB_OK=TRUE
+   python scripts/live_predict.py --camera 0 --backend DSHOW \
+                                  --use-action-classifier
+   ```
+
+   The OSD shows the dominant action (`stand` / `sitting` / `falling`
+   / `fallen`) plus the full 4-way distribution and the ring-buffer
+   fill percentage. Console prints the dominant class once per second.
+
+If the weights file is missing, `TemporalHead` logs a single
+`WARNING` and falls back to a deterministic posture heuristic over the
+PoseFeatures triple — so unit tests, CI and any deployment that has
+not yet downloaded the weights keep running end-to-end.
+
+### 3.8 `kineticpulse.webrtc`
+
+[peer.py](../kineticpulse/webrtc/peer.py) now runs a real `aiortc`
+publisher with authenticated WebSocket signaling. The module includes:
+
+- `peer.py` — peer lifecycle (`start` / `stop`), offer/answer/ICE wiring,
+  bounded startup timeout, safe fallback on dependency/network failure.
+- `signaling_client.py` — JSON-over-WS client used by Jetson.
+- `tracks.py` — OpenCV camera -> `VideoStreamTrack`.
+- `types.py` — ICE/session metadata dataclasses (`WebrtcSessionMeta`).
 
 ### 3.9 `kineticpulse.utils`
 
@@ -219,7 +268,7 @@ sequenceDiagram
     participant Disp as Dispatch worker<br/>(main.py)
     participant Voice as VoicePrompt / STT<br/>(voice/)
     participant Hook as WebhookDispatcher<br/>(webhooks.py)
-    participant RTC as WebrtcPeer (stub)
+    participant RTC as WebrtcPeer (aiortc)
 
     Cam->>Det: Frame
     Cam->>Pose: Frame
@@ -540,8 +589,7 @@ python -m pytest tests/test_tcp_sensor.py -v                    # focus on the T
   smoke-test manually with `--no-camera` removed.
 - The webhook dispatcher — needs an HTTP server fixture; add when the
   first webhook integration ships.
-- WebRTC — currently a stub; replace when the signaling-server design
-  lands.
+- Full media e2e without dependencies (`aiortc`/`av`) installed.
 
 When you ship a feature with non-trivial logic, **add a unit test for the
 pure-logic portion** even if the integration is mocked.
@@ -616,32 +664,161 @@ degradation tests should still pass — they're verifying the *no-accel*
 behavior is still safe; they don't depend on accel actually being absent
 in deployment.
 
-### 8.3 Dashboard / signaling server lands
+### 8.3 Dashboard / signaling server lands (DONE baseline)
 
-**Files to change:**
-- [kineticpulse/webrtc/peer.py](../kineticpulse/webrtc/peer.py) →
-  replace the stub with a real `aiortc` peer that publishes a video
-  track from the same webcam.
-- [requirements.txt](../requirements.txt) → uncomment `aiortc>=1.6.0`
-  and `av>=11.0.0`.
-- [config.example.yaml](../config.example.yaml) → set
-  `webrtc.signaling_url`.
+Current baseline includes:
+- Jetson-side `aiortc` peer in [kineticpulse/webrtc/peer.py](../kineticpulse/webrtc/peer.py)
+- Signaling client + typed session metadata in
+  [kineticpulse/webrtc/signaling_client.py](../kineticpulse/webrtc/signaling_client.py)
+  and [kineticpulse/webrtc/types.py](../kineticpulse/webrtc/types.py)
+- Next.js caregiver UI + signaling backend under `dashboard/`
+- TURN deployment templates in `dashboard/deploy/`
+- Rollout gates in [docs/WEBRTC_ROLLOUT.md](./WEBRTC_ROLLOUT.md)
 
-The orchestrator's `await webrtc.start(snapshot)` call site won't
-change.
+### 8.4 `ActionLogits` ↔ fusion engine wiring (DONE)
 
-### 8.4 Temporal fall-clip dataset arrives
+The temporal head is now plumbed into the fusion engine end-to-end.
+This subsection documents the contract so future contributors don't
+re-derive it. (Tests covering the wiring live in
+`tests/test_fusion_action_logits.py` and
+`tests/test_temporal_stabilisation.py`.)
 
-**File to change:**
-- [kineticpulse/temporal/stgcn.py](../kineticpulse/temporal/stgcn.py) →
-  replace the heuristic in `TemporalHead.maybe_predict()` with a real
-  ST-GCN forward pass on the keypoint ring buffer. Add the training
-  script as `scripts/train_temporal.py`.
+**Data flow.** `_vision_worker` in `kineticpulse/main.py` calls
+`TemporalHead.maybe_predict()` every frame and pushes the returned
+`ActionLogits` onto a bounded `actions_q` (drop-oldest on full).
+`FusionEngine._ingest_actions()` consumes that queue and stores the
+latest `ActionLogits` on the engine. Each evaluation cycle,
+`_build_snapshot()` passes it into `pose_signature(...)`.
 
-The fusion engine doesn't care — it never reads `ActionLogits` directly
-in the current implementation. Once you have a trained head, you can
-either consume its output from the engine or use it to gate the rule
-engine's `pose_signature` confidence.
+**Override rules in `pose_signature`** (in
+[kineticpulse/fusion/rules.py](../kineticpulse/fusion/rules.py)):
+
+1. If `action_logits.stable_label is not None` (the hysteresis-confirmed
+   label from `TemporalHead`), it replaces the static detector class.
+   This is the **production path** — `stable_label` only flips after
+   `temporal.hysteresis_min_consecutive` consecutive smoothed-argmax
+   matches, so it is deliberately low-jitter.
+2. Otherwise, if the raw smoothed argmax probability is at least
+   `temporal.action_confidence_threshold` (default 0.55), it replaces
+   the detector class. This handles the warm-up window before
+   hysteresis settles.
+3. Otherwise the static detector class wins. The rest of the function
+   (torso-angle / aspect-ratio / velocity demotions) is unchanged.
+
+**Output stabilisation** (in
+[kineticpulse/temporal/stgcn.py](../kineticpulse/temporal/stgcn.py)):
+`TemporalHead._stabilise()` runs after every backend prediction and
+publishes a smoothed `ActionLogits` whose `stable_label` field is the
+hysteresis-confirmed class. EMA weight (`smoothing_alpha`) and
+hysteresis depth (`hysteresis_min_consecutive`) are configurable on
+`TemporalConfig`. Recommended starting values are 0.4 and 3
+respectively (tuned against the 1–2 s sitting↔falling oscillation seen
+in the live test).
+
+**Snapshot + alert payload.** `FusionSnapshot` now carries
+`action_class` / `action_conf` (stable label if available, raw argmax
+otherwise), and `build_payload()` includes them under
+`detector.action_class` / `detector.action_confidence` so downstream
+webhook consumers (caregiver dashboard) can render the temporal head's
+verdict alongside the per-frame detector.
+
+### 8.4.1 Tuning the override behaviour
+
+`temporal.action_confidence_threshold` controls how aggressive the
+override is during warm-up. The live test on a top-down laptop webcam
+showed `stand` confidence 0.85–0.93, `sitting` 0.55–0.82, `fallen` 0.49.
+0.55 is therefore a reasonable knob: it always picks up `stand` and
+`sitting`, mostly picks up `fallen`, and stays cautious about `falling`
+(where 0.40–0.50 is common in transition windows). Lower values trade
+latency for sensitivity; raise it if the static detector is more
+trustworthy than TSSTG in your deployment domain.
+
+### 8.5 Fine-tune TSSTG on environment data (toolchain LANDED)
+
+If the released checkpoint mis-classifies your specific setup
+(camera angle, room layout, subject demographics), the fix is data,
+not architecture. The full workflow is now in-tree as three composable
+scripts that share a single on-disk schema:
+
+```
+dataset/temporal_clips/<label>/<stem>.npz
+  keypoints  : float32, (T, 17, 3)   raw COCO-17 + score
+  label      : "fallen" | "falling" | "stand" | "sitting"
+  fps        : float32                effective FPS post-stride
+  image_size : int32 (W, H)
+  video_path : provenance string
+```
+
+**Step 1 — collect labelled clips.** Either record live in front of
+the camera, or batch-extract from existing footage:
+
+```bash
+# Live: hotkeys 1=fallen 2=falling 3=stand 4=sitting save the last
+# 30 frames of keypoints to dataset/temporal_clips/<label>/.
+python scripts/live_predict.py --camera 0 --backend DSHOW --record
+
+# Batch from videos. Folder convention <root>/<label>/*.mp4 auto-labels;
+# pass --label LABEL to override for a single file or flat folder.
+python scripts/extract_keypoints.py --input data/raw_clips --out dataset/temporal_clips
+python scripts/extract_keypoints.py --input data/sit_demo.mp4 --label sitting
+python scripts/extract_keypoints.py --input data/long_session.mp4 --label stand \
+    --clip-window 30 --clip-overlap 15
+```
+
+Both tools normalise to the same `.npz` schema, so they compose: live-
+recorded sittings + extracted falling videos + extracted stands all
+live in the same `dataset/temporal_clips/` tree.
+
+**Step 2 — fine-tune.** `scripts/train_temporal.py` keeps the upstream
+**7-output head** (`Standing / Walking / Sitting / Lying Down / Stand
+up / Sit down / Fall Down`) so the released `tsstg-model.pth` loads
+with `strict=True`. We supervise only the four classes we record by
+mapping each to its canonical 7-way index:
+
+| KP label | TSSTG index |
+|---|---|
+| `stand`   | 0 (Standing)   |
+| `sitting` | 2 (Sitting)    |
+| `fallen`  | 3 (Lying Down) |
+| `falling` | 6 (Fall Down)  |
+
+Loss is BCE on the sigmoided 7-way output with one-hot targets at the
+mapped index. The transition heads (`Walking`, `Stand up`, `Sit down`)
+are unsupervised and their existing weights drift slowly, so the
+upstream generalisation is preserved. Cropping rules: random 30-frame
+windows in training, centred crop in val. Forward-fill of zero-score
+rows so blank frames don't poison the per-clip min-max rescale.
+
+```bash
+# Default: full backbone trainable, 40 epochs, Adam(1e-4), 4 random
+# crops per clip per epoch, 20% stratified val split.
+python scripts/train_temporal.py
+
+# Tiny dataset (< ~200 clips)? Train only the final fcn linear layer
+# to avoid catastrophic overfitting:
+python scripts/train_temporal.py --freeze-backbone --epochs 60
+
+# Plug new weights into live test:
+python scripts/live_predict.py --use-action-classifier \
+    --tsstg-weights models/tsstg/finetune-<run>/best.pth
+```
+
+Each run writes `models/tsstg/finetune-<timestamp>/`:
+
+* `best.pth` — lowest validation loss
+* `last.pth` — last epoch (use this if you trust your val split was small)
+* `train.csv` — per-epoch `train_loss / train_acc4 / val_loss / val_acc4`
+* `args.json` — frozen CLI snapshot for reproducibility
+
+Validation accuracy is reported on **the 4 indices we supervise**, not
+the full 7-way argmax (the heads we don't train would otherwise inflate
+the metric). The final epoch also prints a 4×4 confusion matrix so you
+can see whether `sitting` keeps bleeding into `falling`, etc.
+
+Because `stgcn_model.py` is byte-compatible with the upstream, any
+checkpoint trained this way drops straight back into `temporal.weights`
+in `config.yaml` (or `--tsstg-weights ...` for `live_predict.py`)
+without code changes.
 
 ---
 
@@ -728,7 +905,7 @@ for s in synthetic_samples:
 | `MockSensorClient: scenario=... accel=DISABLED ...` | Mock running in HR-only mode (`has_accelerometer=False`). |
 | `Webhook ... -> ... (200)` | A webhook fired successfully. |
 | `Webhook ... failed: ...` | A webhook is misconfigured; doesn't affect other webhooks or the loop. |
-| `[stub] WebRTC start requested` | WebRTC stub fired (real aiortc not yet wired). |
+| `WebRTC session started: ...` | aiortc peer reached offer/answer setup and session is active. |
 
 ---
 
@@ -852,7 +1029,7 @@ Before opening a PR, run through this list:
 | Term | Meaning |
 |---|---|
 | **PRD** | Project Requirements Document. Lives in `CPS ideas - Google Docs.pdf`. The system's source of truth for *what* it does. |
-| **Pipeline 2** | The recommended runtime architecture (chosen earlier): YOLOv8s detector + pretrained YOLOv8n-pose + ST-GCN stub + sensor fusion. |
+| **Pipeline 2** | The recommended runtime architecture: YOLOv8s detector + YOLOv8s-pose + TSSTG + sensor fusion + WebRTC escalation path. |
 | **Tier 0 / 1 / 2** | Emergency severity. Tier 0 = dismiss, Tier 1 = verify verbally, Tier 2 = escalate immediately (bypass voice). |
 | **Scenario A / B / C / D** | The four PRD §5 fall scenarios: standard fall / suspected seizure / syncope / false positive. |
 | **Signature** | A coarse enum-valued summary of a modality's recent samples (`PoseSignature`, `AccelSignature`, `HrSignature`). The classifier consumes these, not the raw samples. |

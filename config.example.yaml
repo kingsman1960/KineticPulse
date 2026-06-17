@@ -24,15 +24,39 @@ detector:
 
 pose:
   enabled: true
-  weights: yolov8n-pose.pt # auto-downloaded pretrained COCO weights
+  weights: yolov8s-pose.pt # 13 MB, COCO val AP ~60. Auto-downloads on first use.
+                           # Use yolov8n-pose.pt (~6 MB, AP ~50) on very limited
+                           # hardware, or yolov8m-pose.pt (~25 MB, AP ~66) for
+                           # higher keypoint accuracy at the cost of FPS.
   conf: 0.5
   imgsz: 640
   device: auto
 
 temporal:
+  # Action classifier (TSSTG / two-stream ST-GCN). When the weights below
+  # are present we use the real model; otherwise the head silently falls
+  # back to a posture-feature heuristic so dev environments still run.
+  # See docs/MANUAL.md for the tsstg-model.pth download instructions.
   enabled: true
-  window_size: 60          # frames (~2 s @ 30 FPS)
+  weights: models/tsstg/tsstg-model.pth
+  device: auto             # auto | cpu | cuda | cuda:0 ...
+  window_size: 60          # frames in the keypoint ring buffer (~2 s @ 30 FPS)
   stride: 5                # run temporal head every N frames
+  sequence_length: 30      # TSSTG expects 30-frame clips
+  image_width: 1280        # used to normalise keypoint coords; should match camera.width
+  image_height: 720
+
+  # --- Output stabilisation (Phase 2) -- damps the 1-2 s oscillation
+  # between sitting and falling that appeared at posture transitions
+  # in live testing. Lower alpha = smoother / more latency; higher
+  # min_consecutive = more confident `stable_label` but slower latch.
+  smoothing_alpha: 0.4
+  hysteresis_min_consecutive: 3
+  # Minimum smoothed-argmax confidence required for the temporal head
+  # to override the per-frame detector when no `stable_label` is set
+  # yet (warm-up window). Production path goes through `stable_label`
+  # which has no threshold.
+  action_confidence_threshold: 0.55
 
 wristband:
   # Transport: BLE was abandoned for stability; the ESP32 now opens a TCP
@@ -102,8 +126,25 @@ alerts:
 
 webrtc:
   enabled: false
-  signaling_url: null
+  signaling_url: "wss://your-signaling.example/ws"
+  auth_token: "REPLACE_ME_LONG_RANDOM_TOKEN"
+  session_id_prefix: "kp"
   always_on: false
+  connect_timeout_s: 8.0
+  reconnect_backoff_s: 3.0
+  max_session_s: 120.0
+  enable_audio: false
+  video_bitrate_kbps: 1200
+  # Add TURN for internet reliability. For coturn static-secret or long-term
+  # credentials, include username + credential.
+  ice_servers:
+    - urls:
+        - "stun:stun.l.google.com:19302"
+    - urls:
+        - "turn:turn.your-domain.com:3478?transport=udp"
+        - "turn:turn.your-domain.com:3478?transport=tcp"
+      username: "caregiver"
+      credential: "REPLACE_ME"
 
 logging:
   level: INFO              # DEBUG | INFO | WARNING | ERROR

@@ -18,6 +18,7 @@ import asyncio
 import io
 import signal
 import sys
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Optional
@@ -37,6 +38,7 @@ from kineticpulse.fusion.tiers import EmergencyTier
 from kineticpulse.sensors import build_sensor_client
 from kineticpulse.sensors.parser import SensorEvent
 from kineticpulse.temporal.stgcn import KeypointRingBuffer, TemporalHead
+from kineticpulse.temporal.types import ActionLogits
 from kineticpulse.utils.logging import configure_logging, get_logger
 from kineticpulse.utils.timing import now_ms
 from kineticpulse.vision.capture import Frame, build_source
@@ -47,6 +49,7 @@ from kineticpulse.voice.prompts import PromptPlayer
 from kineticpulse.voice.safe_words import VoiceVerdict, classify_response
 from kineticpulse.voice.stt import build_stt
 from kineticpulse.webrtc.peer import WebrtcPeer
+from kineticpulse.webrtc.types import WebrtcSessionMeta
 
 log = get_logger("kineticpulse.main")
 
@@ -89,6 +92,7 @@ async def _vision_worker(
     pose: Optional[PoseEstimator],
     detections_q: "asyncio.Queue[Detection]",
     features_q: "asyncio.Queue[PoseFeatures]",
+    actions_q: "asyncio.Queue[ActionLogits]",
     stop: asyncio.Event,
     no_camera: bool,
 ) -> None:
@@ -147,7 +151,24 @@ async def _vision_worker(
             except asyncio.QueueFull:
                 pass
 
-            _ = temporal_head.maybe_predict(keypoint_buffer, features, frame.timestamp_ms)
+            action = temporal_head.maybe_predict(
+                keypoint_buffer, features, frame.timestamp_ms,
+            )
+            if action is not None:
+                try:
+                    actions_q.put_nowait(action)
+                except asyncio.QueueFull:
+                    # Drop the oldest queued action so the engine stays
+                    # near-real-time. The temporal head runs on a stride
+                    # so dropped frames are safe.
+                    try:
+                        _ = actions_q.get_nowait()
+                    except asyncio.QueueEmpty:
+                        pass
+                    try:
+                        actions_q.put_nowait(action)
+                    except asyncio.QueueFull:
+                        pass
     finally:
         source.stop()
         executor.shutdown(wait=False)
@@ -167,12 +188,28 @@ async def _dispatch_worker(
     dispatcher = WebhookDispatcher(cfg.alerts.webhooks)
     prompt_player = PromptPlayer()
     stt = build_stt(cfg.voice, mock=args.mock_stt, mock_response=args.mock_stt_response)
-    webrtc = WebrtcPeer(cfg.webrtc)
+    webrtc = WebrtcPeer(
+        cfg.webrtc,
+        camera_cfg=cfg.camera,
+        subject_id=cfg.alerts.subject_id,
+        location=cfg.alerts.location,
+    )
 
     cooldown_ms = 8_000           # do not retrigger Tier 1 within this window
     last_tier_at_ms = 0
 
     try:
+        async def _safe_webrtc_start(*, snap: FusionSnapshot, session_id: str, session_meta: WebrtcSessionMeta) -> None:
+            if not cfg.webrtc.enabled:
+                return
+            try:
+                await asyncio.wait_for(
+                    webrtc.start(snap, session_id=session_id, session_meta=session_meta),
+                    timeout=max(1.0, cfg.webrtc.connect_timeout_s + 1.0),
+                )
+            except Exception as exc:
+                log.warning("WebRTC startup failed (session=%s): %s", session_id, exc)
+
         while not stop.is_set():
             try:
                 snap: FusionSnapshot = await asyncio.wait_for(snapshots_q.get(), timeout=1.0)
@@ -190,10 +227,23 @@ async def _dispatch_worker(
                         tier.value, snap.decision.scenario, snap.decision.reason)
 
             if tier.bypasses_voice:
-                payload = build_payload(cfg.alerts, snap)
+                session_id = f"{cfg.webrtc.session_id_prefix}-{uuid.uuid4().hex[:12]}"
+                payload = build_payload(cfg.alerts, snap, session_id=session_id)
+                session_meta = WebrtcSessionMeta(
+                    session_id=session_id,
+                    timestamp_ms=snap.timestamp_ms,
+                    tier=tier.value,
+                    scenario=snap.decision.scenario,
+                    subject_id=cfg.alerts.subject_id,
+                    location=cfg.alerts.location,
+                    reason=snap.decision.reason,
+                    detector_class=snap.detector_class,
+                    action_class=snap.action_class,
+                    action_confidence=snap.action_conf,
+                )
                 await asyncio.gather(
                     dispatcher.dispatch(payload),
-                    webrtc.start(snap),
+                    _safe_webrtc_start(snap=snap, session_id=session_id, session_meta=session_meta),
                 )
                 continue
 
@@ -217,10 +267,26 @@ async def _dispatch_worker(
                 "verdict": verdict.value,
                 "matched_phrase": matched,
             }
-            payload = build_payload(cfg.alerts, snap, voice_extra=voice_extra)
+            session_id = f"{cfg.webrtc.session_id_prefix}-{uuid.uuid4().hex[:12]}"
+            payload = build_payload(
+                cfg.alerts, snap, voice_extra=voice_extra, session_id=session_id
+            )
+            session_meta = WebrtcSessionMeta(
+                session_id=session_id,
+                timestamp_ms=snap.timestamp_ms,
+                tier=tier.value,
+                scenario=snap.decision.scenario,
+                subject_id=cfg.alerts.subject_id,
+                location=cfg.alerts.location,
+                reason=snap.decision.reason,
+                detector_class=snap.detector_class,
+                action_class=snap.action_class,
+                action_confidence=snap.action_conf,
+                extra={"voice_verdict": verdict.value},
+            )
             await asyncio.gather(
                 dispatcher.dispatch(payload),
-                webrtc.start(snap),
+                _safe_webrtc_start(snap=snap, session_id=session_id, session_meta=session_meta),
             )
     finally:
         await dispatcher.aclose()
@@ -240,6 +306,7 @@ async def run(args: argparse.Namespace) -> int:
 
     detections_q: "asyncio.Queue[Detection]" = asyncio.Queue(maxsize=8)
     features_q: "asyncio.Queue[PoseFeatures]" = asyncio.Queue(maxsize=8)
+    actions_q: "asyncio.Queue[ActionLogits]" = asyncio.Queue(maxsize=8)
     sensor_q: "asyncio.Queue[SensorEvent]" = asyncio.Queue(maxsize=512)
     snapshots_q: "asyncio.Queue[FusionSnapshot]" = asyncio.Queue(maxsize=16)
     stop = asyncio.Event()
@@ -275,6 +342,7 @@ async def run(args: argparse.Namespace) -> int:
         features=features_q,
         sensor_events=sensor_q,
         snapshots=snapshots_q,
+        actions=actions_q,
     )
 
     loop = asyncio.get_event_loop()
@@ -289,7 +357,7 @@ async def run(args: argparse.Namespace) -> int:
         asyncio.create_task(sensors.run(), name="sensors"),
         asyncio.create_task(fusion.run(), name="fusion"),
         asyncio.create_task(_vision_worker(
-            cfg, detector, pose, detections_q, features_q, stop, args.no_camera,
+            cfg, detector, pose, detections_q, features_q, actions_q, stop, args.no_camera,
         ), name="vision"),
         asyncio.create_task(_dispatch_worker(cfg, snapshots_q, args, stop), name="dispatch"),
     ]

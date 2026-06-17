@@ -1,0 +1,29 @@
+# coturn production template for KineticPulse
+# Copy to coturn.conf and replace all REPLACE_* values.
+
+listening-port=3478
+tls-listening-port=5349
+realm=turn.your-domain.com
+server-name=kineticpulse-turn
+
+fingerprint
+no-multicast-peers
+no-cli
+stale-nonce
+use-auth-secret
+static-auth-secret=REPLACE_LONG_RANDOM_SECRET
+
+# Alternative to auth-secret mode:
+# lt-cred-mech
+# user=caregiver:REPLACE_PASSWORD
+
+cert=/etc/coturn/certs/fullchain.pem
+pkey=/etc/coturn/certs/privkey.pem
+
+external-ip=REPLACE_PUBLIC_IP
+min-port=49152
+max-port=65535
+
+# Logging
+simple-log
+log-file=stdout

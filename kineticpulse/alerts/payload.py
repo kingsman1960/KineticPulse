@@ -34,6 +34,7 @@ class AlertPayload:
     vitals: Dict[str, Any] = field(default_factory=dict)
     detector: Dict[str, Any] = field(default_factory=dict)
     voice: Dict[str, Any] = field(default_factory=dict)
+    session: Dict[str, Any] = field(default_factory=dict)
     timestamp_ms: int = 0
 
     def as_json(self) -> Dict[str, Any]:
@@ -46,6 +47,7 @@ def build_payload(
     *,
     nature_override: Optional[str] = None,
     voice_extra: Optional[Dict[str, Any]] = None,
+    session_id: Optional[str] = None,
 ) -> AlertPayload:
     decision = snapshot.decision
     nature = nature_override or _TIER_TO_NATURE.get(decision.tier, "Fall Event")
@@ -62,6 +64,8 @@ def build_payload(
         "class": snapshot.detector_class,
         "confidence": snapshot.detector_conf,
         "pose_signature": snapshot.pose.value,
+        "action_class": snapshot.action_class,
+        "action_confidence": snapshot.action_conf,
     }
 
     return AlertPayload(
@@ -75,5 +79,6 @@ def build_payload(
         vitals=vitals,
         detector=detector,
         voice=voice_extra or {},
+        session={"id": session_id} if session_id else {},
         timestamp_ms=snapshot.timestamp_ms or now_ms(),
     )
