@@ -632,7 +632,6 @@ Status legend: **Done** = merged to `main` and verified · **In Progress** = act
 | WebRTC production rollout (TURN deployment, `docs/WEBRTC_ROLLOUT.md` gates) | Ren-Yi Huang | Pending |
 | `config.example.yaml` field documentation audit | Yong Zhe Sam | In Progress |
 | Safe-keyword / distress lexicon review (`kineticpulse/voice/safe_words.py`) | Yong Zhe Sam | Pending |
-| TSSTG weights setup guide review (`models/tsstg/README.md`) | Yong Zhe Sam | Pending |
 
 #### Hardware Division — Lead: Hao-Yuan Weng
 
@@ -653,11 +652,13 @@ Status legend: **Done** = merged to `main` and verified · **In Progress** = act
 
 | Task | Assignee | Status |
 |------|----------|--------|
-| README maintenance & getting-started guide | Yiyuan Chen | In Progress |
-| `docs/MANUAL.md` — hardware-integration milestone sections (§8) | Yiyuan Chen | In Progress |
-| `docs/WEBRTC_ROLLOUT.md` production rollout checklist | Yiyuan Chen | Pending |
+| README — product overview & getting-started guide | Youngwon Cho | **Done** |
+| `docs/MANUAL.md` — full developer manual (incl. §8 hardware-integration milestones) | Youngwon Cho | **Done** |
+| `docs/WEBRTC_ROLLOUT.md` — production rollout checklist | Youngwon Cho | **Done** |
+| `dataset/README.md` — merge schema & source-dataset rationale | Youngwon Cho | **Done** |
+| `models/tsstg/README.md` — TSSTG weights setup guide | Youngwon Cho | **Done** |
 | Internal PRD v3.0 alignment & progress report | Yiyuan Chen | Pending |
-| Dataset merge rationale write-up (`dataset/README.md`) | Yiyuan Chen | In Progress |
+| Ongoing README / manual maintenance & release notes | Yiyuan Chen | In Progress |
 
 > **PR merge record:** Software lead Youngwon Cho reviewed and merged PR #1 (webhook tests, Yuanhao Chen) and PR #2 (ESP32-S3 bring-up, Hao-Yuan Weng).
 
