@@ -24,6 +24,7 @@ KineticPulse is a multi-modal fall detection platform that runs on the **Nvidia 
 - [Project Structure](#project-structure)
 - [Non-Functional Requirements](#non-functional-requirements)
 - [Roadmap](#roadmap)
+- [Team & Task Assignment](#team--task-assignment)
 - [Contributing](#contributing)
 - [License](#license)
 
@@ -582,6 +583,83 @@ KineticPulse/
 - [x] WebRTC peer + caregiver dashboard baseline (aiortc Jetson peer, authenticated signaling server, Next.js session viewer, TURN-ready config + rollout checklist)
 - [ ] ESP32 wristband firmware (IMU + PPG HR + **TCP client emitting JSON lines per the schema in [Hardware Status](#hardware-status)**)
 - [ ] Battery-life optimization pass on the wristband
+
+---
+
+## Team & Task Assignment
+
+### Team Structure
+
+| Name | Role | Division |
+|------|------|----------|
+| **Youngwon Cho** | Software Development Lead | Software |
+| Chang-Ting Zhong | Software Engineer | Software |
+| Ren-Yi Huang | Software Engineer | Software |
+| **Hao-Yuan Weng** | Hardware Development Lead (sensor chip integration) | Hardware |
+| Yule Xu | Hardware Engineer | Hardware |
+| Yuanhao Chen | Hardware Engineer | Hardware |
+| **Yiyuan Chen** | Documentation & Reporting Lead | Documentation |
+| Yong Zhe Sam | — | Cross-functional |
+
+### Work Assignment Overview
+
+Status legend: **Done** = merged to `main` and verified · **In Progress** = active branch or partial integration · **Pending** = not yet started
+
+#### Software Division — Lead: Youngwon Cho
+
+| Task | Assignee | Status |
+|------|----------|--------|
+| Pipeline 2 runtime scaffold (`kineticpulse/` package, config loader, async orchestrator) | Youngwon Cho | **Done** |
+| Unified 4-class dataset merge + YOLOv8 train / eval / export pipeline | Youngwon Cho | **Done** |
+| FallDetector + YOLOv8-pose backbone + pose feature extractor | Youngwon Cho | **Done** |
+| Sensor-fusion engine (PRD §5 scenarios A–D, Tier 0–2) | Youngwon Cho | **Done** |
+| TCP/Wi-Fi wristband telemetry server + BLE fallback + `MockSensorClient` | Youngwon Cho | **Done** |
+| MAX30102 raw-PPG → BPM decoder (`kineticpulse/sensors/ppg.py`) | Youngwon Cho | **Done** |
+| Voice verification stack (faster-whisper STT, prompts, safe-word classifier) | Youngwon Cho | **Done** |
+| Webhook alert dispatcher (`kineticpulse/alerts/webhooks.py`) | Youngwon Cho | **Done** |
+| `live_predict.py` webcam spot-check tool (detector / pose / record modes) | Youngwon Cho | **Done** |
+| Two-stream ST-GCN (TSSTG) action classifier integration | Youngwon Cho | **Done** |
+| `ActionLogits` → fusion-engine wiring + EMA / hysteresis stabilisation | Youngwon Cho | **Done** |
+| TSSTG fine-tuning toolchain (`extract_keypoints.py`, `train_temporal.py`, `--record`) | Youngwon Cho | **Done** |
+| WebRTC peer + authenticated signaling + caregiver dashboard (`dashboard/`) | Youngwon Cho | **Done** |
+| Developer manual — primary author (`docs/MANUAL.md`) | Youngwon Cho | **Done** |
+| Webhook dispatcher behaviour tests (`tests/test_webhooks.py`, PR #1) | Yuanhao Chen | **Done** |
+| TCP wristband simulator + contract tests (`scripts/tcp_wristband_simulator.py`) | Chang-Ting Zhong | In Progress |
+| ESP32 TCP telemetry wire-format documentation (`docs/TCP_CONTRACT.md`) | Chang-Ting Zhong | In Progress |
+| CSI / RTSP camera bring-up on Jetson Orin Nano | Ren-Yi Huang | Pending |
+| Phase 1 checkpoint training + metrics report on `dataset/_merged` | Ren-Yi Huang | Pending |
+| Detector `falling` recall pass — mid-fall transition frame collection | Chang-Ting Zhong | Pending |
+| WebRTC production rollout (TURN deployment, `docs/WEBRTC_ROLLOUT.md` gates) | Ren-Yi Huang | Pending |
+| `config.example.yaml` field documentation audit | Yong Zhe Sam | In Progress |
+| Safe-keyword / distress lexicon review (`kineticpulse/voice/safe_words.py`) | Yong Zhe Sam | Pending |
+| TSSTG weights setup guide review (`models/tsstg/README.md`) | Yong Zhe Sam | Pending |
+
+#### Hardware Division — Lead: Hao-Yuan Weng
+
+| Task | Assignee | Status |
+|------|----------|--------|
+| ESP32-S3 PlatformIO development environment (`platformio.ini`, PR #2) | Hao-Yuan Weng | **Done** |
+| I2C bus scanner firmware test (`src/i2c_scanner.cpp`, PR #2) | Hao-Yuan Weng | **Done** |
+| ESP32 TCP client prototype — fake HR JSON telemetry (`src/main.cpp`, PR #2) | Hao-Yuan Weng | **Done** |
+| MAX30102 PPG sensor chip integration on wristband PCB | Hao-Yuan Weng | In Progress |
+| MAX30102 firmware driver — raw IR/Red FIFO streaming over TCP | Yule Xu | In Progress |
+| IMU accelerometer procurement + board integration | Yule Xu | Pending |
+| Production ESP32 wristband firmware (full JSON-lines schema) | Hao-Yuan Weng | Pending |
+| Wristband battery-life optimisation (24–48 h target) | Yule Xu | Pending |
+| BLE transport bench validation (fallback path) | Yuanhao Chen | Pending |
+| Jetson-side TCP sensor decoder validation (`tests/test_tcp_sensor.py` review) | Yuanhao Chen | In Progress |
+
+#### Documentation Division — Lead: Yiyuan Chen
+
+| Task | Assignee | Status |
+|------|----------|--------|
+| README maintenance & getting-started guide | Yiyuan Chen | In Progress |
+| `docs/MANUAL.md` — hardware-integration milestone sections (§8) | Yiyuan Chen | In Progress |
+| `docs/WEBRTC_ROLLOUT.md` production rollout checklist | Yiyuan Chen | Pending |
+| Internal PRD v3.0 alignment & progress report | Yiyuan Chen | Pending |
+| Dataset merge rationale write-up (`dataset/README.md`) | Yiyuan Chen | In Progress |
+
+> **PR merge record:** Software lead Youngwon Cho reviewed and merged PR #1 (webhook tests, Yuanhao Chen) and PR #2 (ESP32-S3 bring-up, Hao-Yuan Weng).
 
 ---
 
