@@ -4,6 +4,7 @@ This folder contains:
 
 - a Next.js caregiver UI (`app/`)
 - a WebSocket signaling server (`server/signaling-server.js`)
+- a cross-platform mobile caregiver app (`../mobile/`) — Expo + React Native WebRTC for iOS/Android
 
 ## 1) Install
 

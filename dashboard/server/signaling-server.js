@@ -50,9 +50,10 @@ function authRole(req) {
   return null;
 }
 
-function originAllowed(origin) {
+function originAllowed(origin, authenticated = false) {
   if (ALLOWED_ORIGINS.length === 0) return true;
-  if (!origin) return false;
+  // Native mobile apps (React Native WebSocket) typically send no Origin header.
+  if (!origin) return authenticated;
   return ALLOWED_ORIGINS.includes(origin);
 }
 
@@ -71,7 +72,8 @@ setInterval(cleanExpiredSessions, 15_000).unref();
 
 const server = http.createServer((req, res) => {
   const origin = req.headers.origin;
-  if (!originAllowed(origin)) return json(res, 403, { ok: false, error: "origin_forbidden" });
+  const role = authRole(req);
+  if (!originAllowed(origin, Boolean(role))) return json(res, 403, { ok: false, error: "origin_forbidden" });
   if (origin) {
     res.setHeader("Access-Control-Allow-Origin", origin);
     res.setHeader("Vary", "Origin");
@@ -82,8 +84,6 @@ const server = http.createServer((req, res) => {
     res.end();
     return;
   }
-
-  const role = authRole(req);
   if (!role) return json(res, 401, { ok: false, error: "unauthorized" });
 
   if (req.method === "GET" && req.url.startsWith("/sessions")) {
@@ -111,12 +111,12 @@ server.on("upgrade", (req, socket, head) => {
     socket.destroy();
     return;
   }
-  if (!originAllowed(req.headers.origin)) {
+  const role = authRole(req);
+  if (!originAllowed(req.headers.origin, Boolean(role))) {
     socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
     socket.destroy();
     return;
   }
-  const role = authRole(req);
   if (!role) {
     socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
     socket.destroy();

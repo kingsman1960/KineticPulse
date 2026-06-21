@@ -1,0 +1,53 @@
+{
+  "expo": {
+    "name": "KineticPulse",
+    "slug": "kineticpulse-caregiver",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "scheme": "kineticpulse",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": false,
+    "icon": "./assets/icon.png",
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "de.tum.kineticpulse.caregiver",
+      "infoPlist": {
+        "NSAppTransportSecurity": {
+          "NSAllowsArbitraryLoads": true,
+          "NSAllowsLocalNetworking": true
+        }
+      }
+    },
+    "android": {
+      "package": "de.tum.kineticpulse.caregiver",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#ffffff"
+      },
+      "permissions": [
+        "INTERNET",
+        "ACCESS_NETWORK_STATE",
+        "MODIFY_AUDIO_SETTINGS"
+      ]
+    },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      [
+        "react-native-webrtc",
+        {
+          "cameraPermission": "KineticPulse may use the camera for future two-way calls.",
+          "microphonePermission": "KineticPulse may use the microphone for future two-way calls."
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}
