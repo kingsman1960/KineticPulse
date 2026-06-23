@@ -18,8 +18,16 @@ dataset/*
 *.trt
 *.tflite
 *.pb
-runs/
-weights/
+runs/**
+!runs/detect/
+runs/detect/**
+!runs/detect/kp_v2_4cls/
+runs/detect/kp_v2_4cls/**
+!runs/detect/kp_v2_4cls/weights/
+runs/detect/kp_v2_4cls/weights/**
+!runs/detect/kp_v2_4cls/weights/best.pt
+!models/tsstg/tsstg-model.pth
+/weights/
 checkpoints/
 experiments/
 wandb/
@@ -91,6 +99,7 @@ Thumbs.db
 desktop.ini
 
 # --- IDE / editor ----------------------------------------------------------
+.cursor/rules/ponytail-lazy-senior-dev.mdc
 .idea/
 .vscode/
 !.vscode/settings.json

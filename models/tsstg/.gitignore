@@ -1,7 +1,6 @@
-# TSSTG weights are ~24 MB and licensed via the upstream Google Drive link
-# (GajuuzZ/Human-Falling-Detect-Tracks). Operators download them per
-# `models/tsstg/README.md`; we deliberately do not redistribute them.
-*.pth
-*.pt
+# Fine-tune outputs and ad-hoc checkpoints stay local; shipped weight is tracked
+# at tsstg-model.pth (see repo-root .gitignore exceptions).
+finetune-*/
+_mirror/
 *.onnx
 *.engine

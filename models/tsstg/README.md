@@ -8,11 +8,9 @@ loads its weights from this folder. The default path baked into
 models/tsstg/tsstg-model.pth
 ```
 
-These weights are **not redistributed** with the KineticPulse repository
-because the source author publishes them on Google Drive only. Until they
-are placed here, `TemporalHead` falls back to a deterministic
-posture-feature heuristic (a single warning is logged on the first
-prediction) and the rest of the pipeline keeps running.
+These weights are **shipped in this private academic repository** at
+`models/tsstg/tsstg-model.pth` (~24 MB). If the file is missing after clone,
+use the mirror download below.
 
 ## Download
 
