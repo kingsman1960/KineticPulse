@@ -1,5 +1,7 @@
 # Caregiver Dashboard + Signaling
 
+> **Architecture report:** [docs/SERVER_ARCHITECTURE.md](../docs/SERVER_ARCHITECTURE.md) — full server topology, signaling flow, mermaid figures, and ops guide.
+
 This folder contains:
 
 - a Next.js caregiver UI (`app/`)
