@@ -1,0 +1,17 @@
+# Lean runtime deps for Jetson edge deployment (no training / test tooling).
+# PyTorch: use JetPack's system wheel via venv --system-site-packages, or install
+# NVIDIA's Jetson PyTorch wheel before pip install -r this file.
+
+ultralytics>=8.2.0
+pillow>=10.0.0
+numpy>=1.24.0
+opencv-python>=4.8.0
+pyyaml>=6.0
+httpx[http2]>=0.25.0
+bleak>=0.21.0
+sounddevice>=0.4.6
+pyttsx3>=2.90
+websockets>=11.0
+aiortc>=1.7.0
+av>=11.0.0
+faster-whisper>=1.0.0

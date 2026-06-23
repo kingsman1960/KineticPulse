@@ -1,0 +1,20 @@
+[Unit]
+Description=KineticPulse fall detection runtime
+After=network-online.target sound.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# EDIT: set to the Linux user that owns the repo clone
+User=jetson
+Group=jetson
+# EDIT: absolute path to your git clone
+WorkingDirectory=/home/jetson/KineticPulse
+ExecStart=/home/jetson/KineticPulse/kineticpulse
+Restart=on-failure
+RestartSec=10
+Environment=KINETICPULSE_CONFIG=/home/jetson/KineticPulse/config.yaml
+# Environment=KINETICPULSE_EXTRA_ARGS=--mock-ble --mock-stt
+
+[Install]
+WantedBy=multi-user.target

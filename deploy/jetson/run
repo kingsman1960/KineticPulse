@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# KineticPulse launcher — run after deploy/jetson/install.sh (or ./install.sh).
+set -euo pipefail
+
+_script_dir() {
+  cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd
+}
+
+_repo_root() {
+  local script_dir="$1"
+  if git -C "$script_dir" rev-parse --show-toplevel &>/dev/null; then
+    git -C "$script_dir" rev-parse --show-toplevel
+  else
+    cd "$script_dir/../.." && pwd
+  fi
+}
+
+SCRIPT_DIR="$(_script_dir)"
+ROOT="$(_repo_root "$SCRIPT_DIR")"
+cd "$ROOT"
+
+VENV="$ROOT/.venv"
+if [[ ! -d "$VENV" ]]; then
+  echo "KineticPulse venv missing. Run once: ./install.sh" >&2
+  exit 1
+fi
+
+# shellcheck disable=SC1091
+source "$VENV/bin/activate"
+
+CONFIG="${KINETICPULSE_CONFIG:-$ROOT/config.yaml}"
+if [[ ! -f "$CONFIG" ]]; then
+  if [[ -f "$ROOT/config.example.yaml" ]]; then
+    cp "$ROOT/config.example.yaml" "$CONFIG"
+    echo "Created $CONFIG from config.example.yaml — edit before production use." >&2
+  else
+    echo "Config not found: $CONFIG" >&2
+    exit 1
+  fi
+fi
+
+EXTRA=()
+if [[ -n "${KINETICPULSE_EXTRA_ARGS:-}" ]]; then
+  # ponytail: optional env hook for systemd / ops without wrapping the binary
+  read -r -a EXTRA <<< "$KINETICPULSE_EXTRA_ARGS"
+fi
+
+exec python -m kineticpulse.main --config "$CONFIG" "${EXTRA[@]}" "$@"
