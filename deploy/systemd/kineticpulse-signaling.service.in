@@ -1,0 +1,17 @@
+[Unit]
+Description=KineticPulse WebRTC signaling server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@DEPLOY_USER@
+Group=@DEPLOY_USER@
+WorkingDirectory=@REPO_ROOT@/dashboard
+EnvironmentFile=@SECRETS_FILE@
+ExecStart=@NODE_BIN@ @REPO_ROOT@/dashboard/server/signaling-server.js
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

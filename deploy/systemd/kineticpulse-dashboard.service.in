@@ -1,0 +1,17 @@
+[Unit]
+Description=KineticPulse caregiver dashboard (Next.js)
+After=network-online.target kineticpulse-signaling.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@DEPLOY_USER@
+Group=@DEPLOY_USER@
+WorkingDirectory=@REPO_ROOT@/dashboard
+EnvironmentFile=@REPO_ROOT@/dashboard/.env.local
+ExecStart=@NPM_BIN@ run start -- -p 3000
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

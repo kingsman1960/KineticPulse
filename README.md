@@ -21,6 +21,8 @@ KineticPulse is a multi-modal fall detection platform that runs on the **Nvidia 
 - [Hardware Status](#hardware-status)
 - [Tech Stack](#tech-stack)
 - [Getting Started](#getting-started)
+- [Jetson deployment](docs/JETSON_DEPLOY.md) — `./bootstrap.sh` one-shot edge deploy
+- [Mobile caregiver app](mobile/README.md) — EAS build + QR setup
 - [Project Structure](#project-structure)
 - [Non-Functional Requirements](#non-functional-requirements)
 - [Roadmap](#roadmap)
@@ -285,7 +287,7 @@ behaviour without any other code change.
 
 - Python 3.9+ (3.10 / 3.11 also tested).
 - A CUDA-capable GPU is recommended for training but not required; the training script auto-falls back to CPU.
-- For Jetson deployment: Nvidia Jetson Orin Nano with JetPack 6.x (provides TensorRT, NVENC, NVDEC).
+- For Jetson deployment: Nvidia Jetson Orin Nano with JetPack 6.x (provides TensorRT, NVENC, NVDEC). **→ run [`./bootstrap.sh`](bootstrap.sh) once (see [docs/JETSON_DEPLOY.md](docs/JETSON_DEPLOY.md)).**
 - USB webcam + microphone + speaker on the deployment box (for dev, all three are optional thanks to the mock flags).
 
 ### 1. Clone + install
@@ -426,7 +428,10 @@ Both record mode and the extract script share the same on-disk schema
 ### 9. Run the Pipeline 2 runtime
 
 ```bash
-cp config.example.yaml config.yaml      # then edit: webhook URLs, wristband MAC, etc.
+cp config.example.yaml config.yaml      # then edit: webhook URLs, wristband TCP, etc.
+
+# Jetson one-shot (runtime + signaling + Tailscale + systemd):
+chmod +x bootstrap.sh && ./bootstrap.sh
 
 # Dev laptop - no wristband, no microphone:
 python -m kineticpulse.main --config config.yaml --mock-ble --mock-stt
@@ -534,7 +539,7 @@ KineticPulse/
 ├── models/
 │   └── tsstg/
 │       ├── README.md            # how to fetch tsstg-model.pth (community mirror)
-│       └── tsstg-model.pth      # gitignored, 24.7 MB, see Getting Started step 6
+│       └── tsstg-model.pth      # shipped in private repo (~24.7 MB); see docs/JETSON_DEPLOY.md
 ├── dataset/
 │   ├── README.md                # source datasets, unified schema, merge rationale
 │   ├── _merged/                 # generated, gitignored
@@ -581,6 +586,10 @@ KineticPulse/
 - [x] TSSTG fine-tuning toolchain — `scripts/live_predict.py --record` (live labelling), `scripts/extract_keypoints.py` (video → `.npz` clips), `scripts/train_temporal.py` (BCE fine-tune over the upstream 7-class head with optional `--freeze-backbone`); collection of deployment-domain clips and the actual fine-tune run are still TODO.
 - [ ] Optional: detector → `falling` recall pass — current val recall on `falling` is 0.69; expanding the dataset with mid-fall transition frames is the lowest-hanging fruit on the per-frame side
 - [x] WebRTC peer + caregiver dashboard baseline (aiortc Jetson peer, authenticated signaling server, Next.js session viewer, TURN-ready config + rollout checklist)
+- [x] Jetson edge deploy package (`install.sh`, `deploy/jetson/`, `kineticpulse` launcher, `requirements-jetson-runtime.txt`)
+- [x] One-shot Jetson bootstrap (`bootstrap.sh` — runtime + signaling + Tailscale + systemd + deploy secrets)
+- [x] Caregiver handoff + QR mobile setup (`write_caregiver_handoff.py`, signaling `/handoff`, `mobile/app/scan.tsx`)
+- [x] Deploy checkpoint weights in private academic repo (`best.pt`, `tsstg-model.pth`; pose auto-downloads on first run)
 - [ ] ESP32 wristband firmware (IMU + PPG HR + **TCP client emitting JSON lines per the schema in [Hardware Status](#hardware-status)**)
 - [ ] Battery-life optimization pass on the wristband
 
@@ -622,6 +631,15 @@ Status legend: **Done** = merged to `main` and verified · **In Progress** = act
 | `ActionLogits` → fusion-engine wiring + EMA / hysteresis stabilisation | Youngwon Cho | **Done** |
 | TSSTG fine-tuning toolchain (`extract_keypoints.py`, `train_temporal.py`, `--record`) | Youngwon Cho | **Done** |
 | WebRTC peer + authenticated signaling + caregiver dashboard (`dashboard/`) | Youngwon Cho | **Done** |
+| Mobile caregiver app (Expo WebRTC viewer, EAS build path, QR setup scan) | Youngwon Cho | **Done** |
+| Jetson edge runtime deploy (`install.sh`, `deploy/jetson/`, `kineticpulse` launcher, `requirements-jetson-runtime.txt`) | Youngwon Cho | **Done** |
+| One-shot Jetson bootstrap (`bootstrap.sh` — runtime + signaling + Tailscale + systemd + `deploy/.env.deploy`) | Youngwon Cho | **Done** |
+| Deploy config wiring (`deploy/scripts/write_deploy_config.py` — WebRTC tokens → `config.yaml`) | Youngwon Cho | **Done** |
+| Tailscale mesh integration for remote caregivers (default in `bootstrap.sh`, `--no-tailscale` opt-out) | Youngwon Cho | **Done** |
+| Caregiver handoff artifacts (`write_caregiver_handoff.py`, QR PNG/JSON, `caregiver.env`, `DEPLOY_SUMMARY.txt`) | Youngwon Cho | **Done** |
+| Headless caregiver QR (`signaling-server.js` `/handoff`, `setup.html`, SSH/SCP flow in `JETSON_DEPLOY.md`) | Youngwon Cho | **Done** |
+| Deploy checkpoint weights in private repo (`best.pt`, `tsstg-model.pth`; `.gitignore` exceptions) | Youngwon Cho | **Done** |
+| Caregiver handoff contract test (`tests/test_caregiver_handoff_qr.py`) | Youngwon Cho | **Done** |
 | Developer manual — primary author (`docs/MANUAL.md`) | Youngwon Cho | **Done** |
 | Webhook dispatcher behaviour tests (`tests/test_webhooks.py`, PR #1) | Yuanhao Chen | **Done** |
 | TCP wristband simulator + contract tests (`scripts/tcp_wristband_simulator.py`) | Chang-Ting Zhong | In Progress |
@@ -653,10 +671,13 @@ Status legend: **Done** = merged to `main` and verified · **In Progress** = act
 | Task | Assignee | Status |
 |------|----------|--------|
 | README — product overview & getting-started guide | Youngwon Cho | **Done** |
+| `docs/JETSON_DEPLOY.md` — Jetson one-shot deploy guide (`bootstrap.sh`, Tailscale, headless QR) | Youngwon Cho | **Done** |
 | `docs/MANUAL.md` — full developer manual (incl. §8 hardware-integration milestones) | Youngwon Cho | **Done** |
 | `docs/WEBRTC_ROLLOUT.md` — production rollout checklist | Youngwon Cho | **Done** |
 | `dataset/README.md` — merge schema & source-dataset rationale | Youngwon Cho | **Done** |
 | `models/tsstg/README.md` — TSSTG weights setup guide | Youngwon Cho | **Done** |
+| `mobile/README.md` — EAS/dev build + QR caregiver setup | Youngwon Cho | **Done** |
+| `dashboard/README.md` — handoff env vars + Jetson co-hosted signaling | Youngwon Cho | **Done** |
 | Internal PRD v3.0 alignment & progress report | Yiyuan Chen | Pending |
 | Ongoing README / manual maintenance & release notes | Yiyuan Chen | In Progress |
 

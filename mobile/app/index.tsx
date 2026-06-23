@@ -95,6 +95,9 @@ export default function HomeScreen() {
         <Link href="/settings" asChild>
           <Button label="Server settings" variant="secondary" style={styles.toolbarButton} />
         </Link>
+        <Link href="/scan" asChild>
+          <Button label="Scan setup QR" variant="secondary" style={styles.toolbarButton} />
+        </Link>
         {settings ? (
           <Text style={styles.serverHint} numberOfLines={1}>
             {settings.signalingHttpBase}

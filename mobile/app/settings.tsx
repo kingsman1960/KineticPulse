@@ -1,4 +1,4 @@
-import { router } from "expo-router";
+import { Link, router } from "expo-router";
 import { useEffect, useState } from "react";
 import { Alert, ScrollView, StyleSheet, Text, View } from "react-native";
 
@@ -36,9 +36,13 @@ export default function SettingsScreen() {
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
       <Text style={styles.help}>
-        Point the app at your KineticPulse signaling server. Use your LAN IP during development
-        (e.g. http://192.168.1.10:8787). Production should use HTTPS/WSS.
+        Scan the setup QR from the Jetson (`deploy/handoff/caregiver-qr.png` after `./bootstrap.sh`)
+        or enter values manually. Use the Jetson Tailscale IP when caregivers are off-LAN.
       </Text>
+
+      <Link href="/scan" asChild>
+        <Button label="Scan setup QR" style={styles.scanButton} />
+      </Link>
 
       <View style={styles.form}>
         <TextField
@@ -105,6 +109,9 @@ const styles = StyleSheet.create({
     borderColor: colors.hairline
   },
   saveButton: {
+    alignSelf: "stretch"
+  },
+  scanButton: {
     alignSelf: "stretch"
   }
 });

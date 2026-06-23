@@ -1,90 +1,105 @@
 # KineticPulse Mobile (Caregiver)
 
-Cross-platform caregiver dashboard for **iOS** and **Android**. Built with **Expo** + **react-native-webrtc**, using the same signaling protocol as the web dashboard (`dashboard/`).
+Cross-platform caregiver app for **iOS** and **Android**. Built with **Expo** + **react-native-webrtc**, using the same signaling protocol as the web dashboard (`dashboard/`).
 
-UI follows the corporate design tokens in [`DESIGN.md`](../DESIGN.md) — light canvas, BMW blue primary CTAs, rectangular (0px) components, Inter 700/300 typography.
+UI follows the corporate design tokens in [`DESIGN.md`](../DESIGN.md).
 
 ## Features
 
 - Poll active emergency sessions from the signaling server
 - Join a session and view the Jetson live WebRTC video feed
 - Display alert context (tier, scenario, subject, location, detector/action labels)
-- Configure signaling HTTP/WS endpoints, caregiver token, and ICE servers
+- **Scan setup QR** — no manual typing (payload from Jetson `bootstrap.sh`)
+- Manual server settings (HTTP/WS base, caregiver token, ICE servers)
 
 ## Prerequisites
 
 - Node.js 18+
-- For **iOS**: macOS with Xcode 15+ (simulator or device)
-- For **Android**: Android Studio + SDK 34+
-- Running KineticPulse signaling server (`dashboard/server/signaling-server.js`)
+- **iOS:** macOS + Xcode 15+ (device or simulator)
+- **Android:** Android Studio + SDK 34+
+- Jetson deployed with [`../bootstrap.sh`](../bootstrap.sh) (signaling + Tailscale)
+- Caregivers on **Tailscale** when not on the same Wi‑Fi as the Jetson
 
-> **Note:** WebRTC requires a **development build**. Expo Go does not include `react-native-webrtc`. Use `npx expo run:ios` / `npx expo run:android` or EAS Build.
+> **WebRTC requires a development build.** **Expo Go does not work** (`react-native-webrtc` is native). Use `eas build` or `npx expo run:android` / `run:ios`.
 
-## 1) Start signaling (from repo root)
+## Caregiver onboarding (production)
 
-```bash
-cd dashboard
-npm install
-set JETSON_SIGNAL_TOKEN=replace_jetson_token
-set CAREGIVER_SIGNAL_TOKEN=replace_caregiver_token
-npm run signal
-```
+1. Install [Tailscale](https://tailscale.com/download) and join the **team tailnet**
+2. Install the **KineticPulse APK/IPA** (EAS or team build — see below)
+3. Open app → **Scan setup QR** (or **Server settings**)
+4. Scan `deploy/handoff/caregiver-qr.png` from the Jetson (created by `./bootstrap.sh`)
 
-## 2) Install mobile dependencies
+No typing required when using the QR. The QR encodes signaling URL, WebSocket URL, and caregiver token.
+
+### Manual fallback
+
+Settings → paste values from `deploy/handoff/caregiver.env` on the Jetson:
+
+- HTTP base: `http://<jetson-tailscale-ip>:8787`
+- WebSocket: `ws://<jetson-tailscale-ip>:8787/ws`
+- Caregiver token: from `deploy/handoff/DEPLOY_SUMMARY.txt`
+
+## Build the app (team — one time per release)
+
+### EAS cloud build (recommended for distribution)
 
 ```bash
 cd mobile
 npm install
+npm install -g eas-cli
+eas login
+eas build --profile preview --platform android   # APK for internal install
+eas build --profile preview --platform ios       # needs Apple Developer account
 ```
 
-## 3) Run on a device or emulator
+Share the EAS download link with caregivers.
 
-### Android
+### Local development build
 
 ```bash
+cd mobile
+npm install
 npx expo prebuild --platform android
 npx expo run:android
 ```
 
-### iOS (macOS only)
+iOS (macOS only):
 
 ```bash
 npx expo prebuild --platform ios
 npx expo run:ios
 ```
 
-### Development server
+Dev server (separate terminal): `npm start`
 
-In another terminal:
+## Local dev against a laptop signaling server
 
-```bash
-npm start
-```
-
-## 4) Configure the app
-
-1. Open the app → **Server settings**
-2. Set **HTTP base** to your signaling host, e.g. `http://192.168.1.10:8787`
-3. Set **WebSocket base**, e.g. `ws://192.168.1.10:8787/ws`
-4. Paste the **caregiver token** (`CAREGIVER_SIGNAL_TOKEN`)
-5. Add TURN URLs when testing across NATs (one per line)
-
-Use your PC's LAN IP — `localhost` only works on the same machine.
-
-## Production builds (EAS)
+If not using Jetson bootstrap yet:
 
 ```bash
-npm install -g eas-cli
-eas login
-eas build --profile preview --platform all
+cd dashboard
+npm install
+export JETSON_SIGNAL_TOKEN=dev-jetson
+export CAREGIVER_SIGNAL_TOKEN=dev-caregiver
+npm run signal
 ```
 
-Update `app.json` bundle identifiers (`de.tum.kineticpulse.caregiver`) before store submission.
+Then either scan a hand-crafted QR (JSON v1 — see `deploy/handoff/caregiver-config.json` format) or enter `http://<lan-ip>:8787` in Settings.
+
+## QR payload format
+
+Written by [`deploy/scripts/write_caregiver_handoff.py`](../deploy/scripts/write_caregiver_handoff.py):
+
+```json
+{"v":1,"signalingHttpBase":"http://100.x.x.x:8787","signalingWsBase":"ws://100.x.x.x:8787/ws","caregiverToken":"...","iceServersText":"stun:stun.l.google.com:19302"}
+```
+
+The app also accepts plain `caregiver.env` text inside a QR.
 
 ## Architecture
 
 ```
-Jetson (aiortc) ──create-session──▶ Signaling server ◀──join-session── Mobile app
+Jetson (aiortc) ──create-session──▶ Signaling :8787 ◀──join-session── Mobile app
                                          │
                                          ├── offer ──▶ Mobile
                                          ◀── answer ─── Mobile
@@ -93,20 +108,22 @@ Jetson (aiortc) ──create-session──▶ Signaling server ◀──join-ses
 
 Mobile reuses the caregiver role from `dashboard/app/session/[id]/page.tsx`.
 
-## Signaling server: native apps
+## Signaling: native apps
 
-When `ALLOWED_ORIGINS` is set, authenticated requests **without** an `Origin` header (native WebSocket) are allowed so iOS/Android clients can connect with a valid caregiver token.
+When `ALLOWED_ORIGINS` is set, authenticated requests **without** an `Origin` header (React Native WebSocket) are still allowed with a valid caregiver token.
 
 ## Troubleshooting
 
 | Symptom | Fix |
 |---------|-----|
-| `HTTP 401` on session list | Set caregiver token in Settings |
-| `HTTP 403` / WebSocket fails | Check `ALLOWED_ORIGINS` or use token auth from mobile |
-| Black video, `connected` | Verify Jetson WebRTC + camera; add TURN for NAT |
-| Cannot reach server | Use LAN IP; Android emulator may need `10.0.2.2` for host machine |
+| `HTTP 401` | Wrong caregiver token — re-scan QR from Jetson |
+| `Network request failed` | Tailscale off, or URL still `localhost` |
+| Invalid QR | Re-run `./bootstrap.sh` on Jetson to regenerate `caregiver-qr.png` |
+| Black video | Jetson `kineticpulse` running; same tailnet; check WebRTC logs |
+| Expo Go | Use a **built** app — WebRTC not in Expo Go |
 
 ## Related docs
 
+- [docs/JETSON_DEPLOY.md](../docs/JETSON_DEPLOY.md) — Jetson one-shot `bootstrap.sh`
 - [dashboard/README.md](../dashboard/README.md) — web dashboard + signaling
-- [docs/WEBRTC_ROLLOUT.md](../docs/WEBRTC_ROLLOUT.md) — production rollout checklist
+- [docs/WEBRTC_ROLLOUT.md](../docs/WEBRTC_ROLLOUT.md) — production WebRTC checklist

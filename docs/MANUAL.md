@@ -5,6 +5,8 @@ A working guide for software engineers extending this codebase. The
 describes **how to work in it**. If you only have 5 minutes, read sections
 [1](#1-get-running-in-10-minutes) and [4](#4-how-a-fall-becomes-an-alert).
 
+**Deploying to a Jetson?** See [JETSON_DEPLOY.md](JETSON_DEPLOY.md) instead of this section.
+
 ## Contents
 
 1. [Get running in 10 minutes](#1-get-running-in-10-minutes)

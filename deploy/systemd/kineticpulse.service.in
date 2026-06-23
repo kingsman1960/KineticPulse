@@ -1,0 +1,18 @@
+[Unit]
+Description=KineticPulse fall detection runtime
+After=network-online.target sound.target kineticpulse-signaling.service
+Wants=network-online.target
+Requires=kineticpulse-signaling.service
+
+[Service]
+Type=simple
+User=@DEPLOY_USER@
+Group=@DEPLOY_USER@
+WorkingDirectory=@REPO_ROOT@
+ExecStart=@REPO_ROOT@/kineticpulse
+Restart=on-failure
+RestartSec=10
+Environment=KINETICPULSE_CONFIG=@REPO_ROOT@/config.yaml
+
+[Install]
+WantedBy=multi-user.target

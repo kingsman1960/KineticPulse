@@ -4,3 +4,4 @@
 # Jetson deploy scripts must stay LF (CRLF breaks shebang on Linux)
 *.sh text eol=lf
 deploy/jetson/run text eol=lf
+bootstrap.sh text eol=lf

@@ -1,7 +1,9 @@
 "use strict";
 
+const fs = require("fs");
 const http = require("http");
 const crypto = require("crypto");
+const path = require("path");
 const { URL } = require("url");
 const WebSocket = require("ws");
 
@@ -14,6 +16,8 @@ const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || "")
   .split(",")
   .map((s) => s.trim())
   .filter(Boolean);
+const HANDOFF_DIR =
+  process.env.HANDOFF_DIR || path.join(__dirname, "..", "..", "deploy", "handoff");
 
 /** @type {Map<string, any>} */
 const sessions = new Map();
@@ -25,6 +29,22 @@ function nowMs() {
 function json(res, status, body) {
   res.writeHead(status, { "Content-Type": "application/json" });
   res.end(JSON.stringify(body));
+}
+
+function serveHandoff(res) {
+  const html = path.join(HANDOFF_DIR, "setup.html");
+  const png = path.join(HANDOFF_DIR, "caregiver-qr.png");
+  if (fs.existsSync(html)) {
+    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+    res.end(fs.readFileSync(html));
+    return true;
+  }
+  if (fs.existsSync(png)) {
+    res.writeHead(200, { "Content-Type": "image/png" });
+    res.end(fs.readFileSync(png));
+    return true;
+  }
+  return false;
 }
 
 function bearerFromHeader(authHeader) {
@@ -71,6 +91,7 @@ function cleanExpiredSessions() {
 setInterval(cleanExpiredSessions, 15_000).unref();
 
 const server = http.createServer((req, res) => {
+  const urlObj = new URL(req.url, "http://localhost");
   const origin = req.headers.origin;
   const role = authRole(req);
   if (!originAllowed(origin, Boolean(role))) return json(res, 403, { ok: false, error: "origin_forbidden" });
@@ -86,7 +107,12 @@ const server = http.createServer((req, res) => {
   }
   if (!role) return json(res, 401, { ok: false, error: "unauthorized" });
 
-  if (req.method === "GET" && req.url.startsWith("/sessions")) {
+  if (req.method === "GET" && urlObj.pathname === "/handoff") {
+    if (!serveHandoff(res)) return json(res, 404, { ok: false, error: "handoff_not_found" });
+    return;
+  }
+
+  if (req.method === "GET" && urlObj.pathname.startsWith("/sessions")) {
     const list = Array.from(sessions.values()).map((s) => ({
       session_id: s.session_id,
       status: s.status,

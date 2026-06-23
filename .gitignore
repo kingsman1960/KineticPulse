@@ -112,6 +112,8 @@ desktop.ini
 !.env.example
 config.yaml
 !config.example.yaml
+deploy/.env.deploy
+deploy/handoff/
 secrets/
 *.pem
 *.key
