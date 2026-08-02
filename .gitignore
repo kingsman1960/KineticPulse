@@ -86,6 +86,12 @@ node_modules/
 .vite/
 *.tsbuildinfo
 
+# SQLite runtime persistence (database path is configurable).
+dashboard/runtime/
+*.db
+*.db-wal
+*.db-shm
+
 # --- Logs / temp -----------------------------------------------------------
 *.log
 *.tmp
