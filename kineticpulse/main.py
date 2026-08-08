@@ -35,6 +35,7 @@ from kineticpulse.alerts.webhooks import WebhookDispatcher
 from kineticpulse.config import RuntimeConfig, load_config
 from kineticpulse.fusion.engine import FusionEngine, FusionSnapshot
 from kineticpulse.fusion.tiers import EmergencyTier
+from kineticpulse.monitoring import MonitoringPublisher
 from kineticpulse.sensors import build_sensor_client
 from kineticpulse.sensors.parser import SensorEvent
 from kineticpulse.temporal.stgcn import KeypointRingBuffer, TemporalHead
@@ -353,6 +354,16 @@ async def run(args: argparse.Namespace) -> int:
         except NotImplementedError:
             pass
 
+    monitoring: Optional[MonitoringPublisher] = None
+    if cfg.monitoring.enabled:
+        monitoring = MonitoringPublisher(
+            host=cfg.monitoring.host,
+            port=cfg.monitoring.port,
+            alerts=cfg.alerts,
+            latest_snapshot=lambda: fusion.latest,
+            sensors=sensors,
+        )
+
     tasks = [
         asyncio.create_task(sensors.run(), name="sensors"),
         asyncio.create_task(fusion.run(), name="fusion"),
@@ -361,6 +372,8 @@ async def run(args: argparse.Namespace) -> int:
         ), name="vision"),
         asyncio.create_task(_dispatch_worker(cfg, snapshots_q, args, stop), name="dispatch"),
     ]
+    if monitoring is not None:
+        tasks.append(asyncio.create_task(monitoring.run(), name="monitoring"))
 
     sentinels = [asyncio.create_task(stop.wait(), name="stop")]
     if args.max_runtime_s is not None and args.max_runtime_s > 0:
@@ -377,6 +390,8 @@ async def run(args: argparse.Namespace) -> int:
     stop.set()
     sensors.stop()
     fusion.stop()
+    if monitoring is not None:
+        monitoring.stop()
     for t in pending:
         t.cancel()
     for t in pending:

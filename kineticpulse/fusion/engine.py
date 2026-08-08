@@ -90,6 +90,7 @@ class FusionEngine:
         self._last_features: Optional[PoseFeatures] = None
         self._last_action: Optional[ActionLogits] = None
         self._last_decision: Optional[TierDecision] = None
+        self.latest: Optional[FusionSnapshot] = None
         self._stop = asyncio.Event()
 
     # ----- ingest tasks -------------------------------------------------- #
@@ -188,6 +189,7 @@ class FusionEngine:
                          snap.decision.tier.value, snap.decision.scenario,
                          snap.decision.reason)
             self._last_decision = snap.decision
+            self.latest = snap
             try:
                 self.snapshots.put_nowait(snap)
             except asyncio.QueueFull:

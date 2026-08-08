@@ -67,9 +67,14 @@ class BleClient:
         self.cfg = cfg
         self.events = events
         self._stop = asyncio.Event()
+        self._link_up = False
         self._ppg_processor = None
         if cfg.has_ppg_raw:
             self._ppg_processor = PpgProcessor(sample_rate_hz=cfg.ppg_sample_rate_hz)
+
+    @property
+    def connected(self) -> bool:
+        return self._link_up
 
     async def run(self) -> None:
         try:
@@ -102,42 +107,46 @@ class BleClient:
                 log.info("BLE: connecting to %s", self.cfg.mac)
                 async with BleakClient(self.cfg.mac) as client:
                     log.info("BLE: connected, subscribing to notifications")
+                    self._link_up = True
                     backoff = delay
+                    try:
+                        if self.cfg.has_accelerometer:
+                            def _on_accel(_handle, data: bytearray) -> None:
+                                sample = parse_accel_packet(bytes(data), now_ms())
+                                if sample is not None:
+                                    self._submit(sample)
+                            await client.start_notify(accel_uuid, _on_accel)
+                        else:
+                            log.info("BLE: skipping accel subscription (has_accelerometer=False).")
 
-                    if self.cfg.has_accelerometer:
-                        def _on_accel(_handle, data: bytearray) -> None:
-                            sample = parse_accel_packet(bytes(data), now_ms())
-                            if sample is not None:
-                                self._submit(sample)
-                        await client.start_notify(accel_uuid, _on_accel)
-                    else:
-                        log.info("BLE: skipping accel subscription (has_accelerometer=False).")
+                        if self.cfg.has_ppg_raw and self._ppg_processor is not None:
+                            def _on_ppg(_handle, data: bytearray) -> None:
+                                base_ts = now_ms()
+                                samples = parse_ppg_packet(
+                                    bytes(data), base_ts,
+                                    sample_rate_hz=self.cfg.ppg_sample_rate_hz,
+                                )
+                                for s in samples:
+                                    hr = self._ppg_processor.push(s)
+                                    if hr is not None:
+                                        self._submit(hr)
+                            await client.start_notify(ppg_uuid, _on_ppg)
+                            log.info("BLE: subscribed to raw PPG (%s @ %d Hz)",
+                                     ppg_uuid, self.cfg.ppg_sample_rate_hz)
+                        else:
+                            def _on_hr(_handle, data: bytearray) -> None:
+                                sample = parse_hr_packet(bytes(data), now_ms())
+                                if sample is not None:
+                                    self._submit(sample)
+                            await client.start_notify(hr_uuid, _on_hr)
+                            log.info("BLE: subscribed to standard HR characteristic (%s)", hr_uuid)
 
-                    if self.cfg.has_ppg_raw and self._ppg_processor is not None:
-                        def _on_ppg(_handle, data: bytearray) -> None:
-                            base_ts = now_ms()
-                            samples = parse_ppg_packet(
-                                bytes(data), base_ts,
-                                sample_rate_hz=self.cfg.ppg_sample_rate_hz,
-                            )
-                            for s in samples:
-                                hr = self._ppg_processor.push(s)
-                                if hr is not None:
-                                    self._submit(hr)
-                        await client.start_notify(ppg_uuid, _on_ppg)
-                        log.info("BLE: subscribed to raw PPG (%s @ %d Hz)",
-                                 ppg_uuid, self.cfg.ppg_sample_rate_hz)
-                    else:
-                        def _on_hr(_handle, data: bytearray) -> None:
-                            sample = parse_hr_packet(bytes(data), now_ms())
-                            if sample is not None:
-                                self._submit(sample)
-                        await client.start_notify(hr_uuid, _on_hr)
-                        log.info("BLE: subscribed to standard HR characteristic (%s)", hr_uuid)
-
-                    while client.is_connected and not self._stop.is_set():
-                        await asyncio.sleep(0.5)
+                        while client.is_connected and not self._stop.is_set():
+                            await asyncio.sleep(0.5)
+                    finally:
+                        self._link_up = False
             except Exception as exc:
+                self._link_up = False
                 log.warning("BLE: %s; reconnecting in %.2fs", exc, backoff)
                 try:
                     await asyncio.wait_for(self._stop.wait(), timeout=backoff)
@@ -156,4 +165,5 @@ class BleClient:
             self.events.put_nowait(ev)
 
     def stop(self) -> None:
+        self._link_up = False
         self._stop.set()

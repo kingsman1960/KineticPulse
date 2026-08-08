@@ -89,17 +89,18 @@ came from a mock, HTTP endpoint, ESP32, future WebSocket, in-memory store, or SQ
 The existing WebSocket endpoint is intentionally left unchanged because it carries
 WebRTC offer/answer/ICE signaling rather than monitoring telemetry.
 
-### Enable the future real HTTP adapter
+### Enable real Jetson sensor data
+
+On the Jetson, `kineticpulse` publishes vitals at `GET /monitoring` (default
+port **8790**, `config.yaml` → `monitoring:`). Point the dashboard at it:
 
 ```bash
 MONITORING_DATA_MODE=real
-KINETICPULSE_MONITORING_HTTP_URL=http://jetson-host:PORT/monitoring
+KINETICPULSE_MONITORING_HTTP_URL=http://<jetson-host>:8790/monitoring
 ```
 
-The Python runtime does not currently expose this endpoint. Until it does, real mode
-returns the dashboard's explicit **backend unavailable** state. Hardware integration
-belongs in the backend publisher and `BackendMonitoringDataSource`; no dashboard
-component changes should be necessary.
+`./bootstrap.sh` writes these into `deploy/handoff/caregiver.env` and
+`dashboard/.env.local` automatically. Keep `mock` mode for UI work without hardware.
 
 ## Expected monitoring contract
 
@@ -139,9 +140,10 @@ Allowed emergency levels are the existing values `none`, `tier_0_dismiss`,
 `tier_1_verify`, `tier_2_seizure`, and `tier_2_cardiac`. Vision classes are
 `fallen`, `falling`, `stand`, and `sitting`; `null` means no camera result.
 
-System health, sensor connection lifecycle, voice progress, alert outcome, and event
-publication are not yet exposed by the Python runtime. These uncertainties are kept in
-the monitoring envelope and marked as hardware-integration TODOs in the adapters.
+Jetson `MonitoringPublisher` fills `system`, `sensor` (TCP/BLE/mock link), and
+`snapshot` from `FusionEngine.latest`. Voice / alert-dispatch progress and rich
+`events[]` are still stubbed (`not_required` / `idle` / `[]`); the dashboard SQLite
+store builds history from polled snapshots.
 
 ## SQLite operational history
 

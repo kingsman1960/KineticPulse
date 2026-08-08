@@ -64,6 +64,11 @@ class MockSensorClient:
         self._rng = random.Random(seed)
         self._fall_at_s: Optional[float] = None
 
+    @property
+    def connected(self) -> bool:
+        """Mock link is up for the whole run (synthetic telemetry)."""
+        return not self._stop.is_set()
+
     async def run(self) -> None:
         log.info(
             "MockSensorClient: scenario=%s accel=%s hr=%.2fHz",

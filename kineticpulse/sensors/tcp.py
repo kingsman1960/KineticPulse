@@ -273,6 +273,12 @@ class TcpSensorServer:
                 pass
             self.events.put_nowait(ev)
 
+    @property
+    def connected(self) -> bool:
+        """True while an ESP32 client holds the single-tenant TCP slot."""
+        w = self._active_writer
+        return w is not None and not w.is_closing()
+
     def stop(self) -> None:
         self._stop.set()
         # Best-effort: hang up on the current client too so readuntil() unblocks.

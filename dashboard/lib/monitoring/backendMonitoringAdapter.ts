@@ -19,7 +19,8 @@ function heartRateStatus(payload: MonitoringWirePayload): HeartRateStatus {
 function motionState(accel: string, magnitudeG: number | null): MotionState {
   if (magnitudeG === null || accel === "unknown") return "unknown";
   if (accel === "impact_tremor") return "tremor";
-  if (accel === "impact_only" || accel === "soft_collapse") return "impact";
+  // Python AccelSignature.IMPACT_ONLY serializes as "impact".
+  if (accel === "impact" || accel === "impact_only" || accel === "soft_collapse") return "impact";
   return magnitudeG < 1.05 ? "resting" : "stable";
 }
 

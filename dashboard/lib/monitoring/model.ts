@@ -80,9 +80,8 @@ export interface MonitoringModel {
 
 /**
  * Wire contract expected by the real-data adapter. Snapshot field names mirror
- * `kineticpulse.fusion.engine.FusionSnapshot` and `alerts.payload.AlertPayload`.
- * The envelope fields marked below do not yet exist in the Python runtime and
- * are intentionally isolated here until a monitoring publisher is added.
+ * `kineticpulse.fusion.engine.FusionSnapshot`. Published by Jetson
+ * `kineticpulse.monitoring.http.MonitoringPublisher` at GET /monitoring.
  */
 export interface MonitoringWirePayload {
   subject_id: string;

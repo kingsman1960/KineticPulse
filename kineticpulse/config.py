@@ -182,6 +182,15 @@ class LoggingConfig:
 
 
 @dataclass
+class MonitoringConfig:
+    """HTTP publisher for the caregiver dashboard vitals UI."""
+
+    enabled: bool = True
+    host: str = "0.0.0.0"
+    port: int = 8790
+
+
+@dataclass
 class RuntimeConfig:
     camera: CameraConfig = field(default_factory=CameraConfig)
     detector: DetectorConfig = field(default_factory=DetectorConfig)
@@ -192,6 +201,7 @@ class RuntimeConfig:
     voice: VoiceConfig = field(default_factory=VoiceConfig)
     alerts: AlertsConfig = field(default_factory=AlertsConfig)
     webrtc: WebrtcConfig = field(default_factory=WebrtcConfig)
+    monitoring: MonitoringConfig = field(default_factory=MonitoringConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
 
 
@@ -259,6 +269,7 @@ def load_config(path: Path) -> RuntimeConfig:
                 "ice_servers": ice_servers,
             }
         ),
+        monitoring=_from_dict(MonitoringConfig, raw.get("monitoring")),
         logging=_from_dict(LoggingConfig, raw.get("logging")),
     )
     return cfg

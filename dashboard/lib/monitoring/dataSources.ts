@@ -21,12 +21,11 @@ export class MockMonitoringDataSource implements MonitoringDataSource {
 }
 
 /**
- * Future real HTTP adapter. The current runtime has no monitoring endpoint, so
- * uncertainty is contained here instead of leaking into UI components.
+ * Real HTTP adapter for Jetson `GET /monitoring`
+ * (`kineticpulse.monitoring.http.MonitoringPublisher`).
  *
- * TODO(hardware integration): point `KINETICPULSE_MONITORING_HTTP_URL` at an
- * edge endpoint that emits `MonitoringWirePayload`. A WebSocket implementation
- * can implement the same `MonitoringDataSource` interface later.
+ * Set `MONITORING_DATA_MODE=real` and
+ * `KINETICPULSE_MONITORING_HTTP_URL=http://<jetson>:8790/monitoring`.
  */
 export class BackendMonitoringDataSource implements MonitoringDataSource {
   readonly source = "jetson" as const;

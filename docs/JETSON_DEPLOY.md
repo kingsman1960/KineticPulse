@@ -166,6 +166,17 @@ Caregivers:
 
 No manual URL/token entry required when using the QR. Re-run `./bootstrap.sh` after Tailscale join to refresh the QR with the `100.x` address.
 
+### Caregiver web dashboard (live vitals)
+
+`kineticpulse` publishes the fusion + wristband snapshot at **`GET :8790/monitoring`**. Bootstrap writes real-mode env into `deploy/handoff/caregiver.env`:
+
+```bash
+MONITORING_DATA_MODE=real
+KINETICPULSE_MONITORING_HTTP_URL=http://<caregiver-host>:8790/monitoring
+```
+
+On a caregiver laptop (same tailnet): copy that file to `dashboard/.env.local`, then `cd dashboard && npm run dev` → open [http://localhost:3000](http://localhost:3000). HR / motion / vision / emergency tier update every ~3s from the Jetson sensor pipeline.
+
 ---
 
 ## 3b. Manual install (advanced)
@@ -237,6 +248,7 @@ Stop with `Ctrl+C`.
 | `wristband` | `tcp_port`, `has_accelerometer`, `has_ppg_raw` | Match ESP32 firmware capabilities |
 | `alerts` | `subject_id`, `location`, `webhooks` | Set caregiver endpoints |
 | `webrtc` | `enabled`, `signaling_url`, `auth_token`, `ice_servers` | See [WEBRTC_ROLLOUT.md](WEBRTC_ROLLOUT.md) |
+| `monitoring` | `enabled`, `host`, `port` (default `8790`) | Dashboard vitals: `GET /monitoring` |
 
 ### Wristband TCP (default production path)
 
