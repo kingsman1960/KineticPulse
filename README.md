@@ -23,6 +23,7 @@ KineticPulse is a multi-modal fall detection platform that runs on the **Nvidia 
 - [Getting Started](#getting-started)
 - [Jetson deployment](docs/JETSON_DEPLOY.md) — `./bootstrap.sh` one-shot edge deploy
 - [Mobile caregiver app](mobile/README.md) — EAS build + QR setup
+- [Report pack](docs/REPORT_GUIDE.md) — cite-ready facts for progress / final reports
 - [Project Structure](#project-structure)
 - [Non-Functional Requirements](#non-functional-requirements)
 - [Roadmap](#roadmap)
@@ -682,6 +683,8 @@ Status legend: **Done** = merged to `main` and verified · **In Progress** = act
 | `models/tsstg/README.md` — TSSTG weights setup guide | Youngwon Cho | **Done** |
 | `mobile/README.md` — EAS/dev build + QR caregiver setup | Youngwon Cho | **Done** |
 | `dashboard/README.md` — handoff env vars + Jetson co-hosted signaling | Youngwon Cho | **Done** |
+| `docs/REPORT_GUIDE.md` — report outline map, metrics, limitations, doc freshness | Youngwon Cho | **Done** |
+| `docs/TCP_CONTRACT.md` / `docs/E2E_LAB.md` — wristband wire format + lab checklist | Youngwon Cho | **Done** |
 | Internal PRD v3.0 alignment & progress report | Yiyuan Chen | Pending |
 | Ongoing README / manual maintenance & release notes | Yiyuan Chen | In Progress |
 

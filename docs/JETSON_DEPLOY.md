@@ -472,6 +472,7 @@ See [SERVER_ARCHITECTURE.md](SERVER_ARCHITECTURE.md) and [WEBRTC_ROLLOUT.md](WEB
 | [dashboard/README.md](../dashboard/README.md) | Caregiver dashboard + signaling server |
 | [E2E_LAB.md](E2E_LAB.md) | Full lab checklist (wristband + APK + dashboard real) |
 | [TCP_CONTRACT.md](TCP_CONTRACT.md) | ESP32 ↔ Jetson NDJSON events |
+| [REPORT_GUIDE.md](REPORT_GUIDE.md) | Progress/final report pack (metrics, contributions, caveats) |
 | [config.example.yaml](../config.example.yaml) | Full runtime config reference |
 
 ---

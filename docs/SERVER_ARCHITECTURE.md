@@ -8,10 +8,14 @@ This report describes how KineticPulse servers and edge processes are structured
 
 Related documents:
 
+- [REPORT_GUIDE.md](./REPORT_GUIDE.md) — **current** topology + cite-ready facts for progress reports (prefer over stale sections below)
+- [JETSON_DEPLOY.md](./JETSON_DEPLOY.md) — `bootstrap.sh`, Tailscale, caregiver QR
 - [dashboard/README.md](../dashboard/README.md) — caregiver dashboard & signaling quick start
 - [docs/WEBRTC_ROLLOUT.md](./WEBRTC_ROLLOUT.md) — production rollout checklist
 - [mobile/README.md](../mobile/README.md) — iOS / Android caregiver app
 - [config.example.yaml](../config.example.yaml) — Jetson runtime WebRTC settings
+
+> **Note (2026-08):** Lab default is Jetson-hosted signaling + Tailscale + `GET :8790/monitoring`. Sections that still describe “cloud-only signaling” or omit monitoring are historical; reconcile with [REPORT_GUIDE.md](./REPORT_GUIDE.md) §2 before citing in a graded report.
 
 ---
 
