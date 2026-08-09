@@ -9,6 +9,7 @@ import {
   View
 } from "react-native";
 
+import { fetchLiveVitals, LiveVitals } from "@/api/monitoring";
 import { fetchSessions, formatTime } from "@/api/sessions";
 import { Button } from "@/components/Button";
 import { FilterChip } from "@/components/FilterChip";
@@ -23,6 +24,10 @@ function SessionCard({ session }: { session: SessionSummary }) {
   const tier = meta.tier ?? "n/a";
   const scenario = meta.scenario ?? "n/a";
   const isCritical = tier.includes("tier_2") || tier.includes("2");
+  const hrLine =
+    meta.heart_rate_bpm != null
+      ? `HR · ${meta.heart_rate_bpm} BPM${meta.hr_signature ? ` (${meta.hr_signature})` : ""}`
+      : null;
 
   return (
     <Link
@@ -37,6 +42,7 @@ function SessionCard({ session }: { session: SessionSummary }) {
         lines={[
           `Status · ${session.status}`,
           `Scenario · ${scenario}`,
+          ...(hrLine ? [hrLine] : []),
           `${meta.subject_id ?? "unknown"} · ${meta.location ?? "unknown"}`,
           `Started ${formatTime(session.created_at_ms)}`
         ]}
@@ -56,6 +62,7 @@ function SessionCard({ session }: { session: SessionSummary }) {
 export default function HomeScreen() {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [settings, setSettings] = useState<AppSettings | null>(null);
+  const [vitals, setVitals] = useState<LiveVitals | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
@@ -67,6 +74,11 @@ export default function HomeScreen() {
       setSettings(cfg);
       const list = await fetchSessions(cfg);
       setSessions(list);
+      try {
+        setVitals(await fetchLiveVitals(cfg));
+      } catch {
+        setVitals(null);
+      }
       setError("");
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -84,12 +96,25 @@ export default function HomeScreen() {
     }, [refresh])
   );
 
+  const vitalsLine = vitals
+    ? [
+        vitals.bpm != null ? `${vitals.bpm} BPM` : "HR n/a",
+        vitals.hrStatus,
+        `ESP32 ${vitals.sensorConnection}`,
+        vitals.emergencyTier !== "none" ? vitals.emergencyTier : null
+      ]
+        .filter(Boolean)
+        .join(" · ")
+    : null;
+
   return (
     <View style={styles.container}>
       <HeroBand
         title="Caregiver dashboard"
         subtitle="Active emergency sessions from Jetson edge nodes. Select a session to open the live feed."
-      />
+      >
+        {vitalsLine ? <Text style={styles.vitalsLine}>{vitalsLine}</Text> : null}
+      </HeroBand>
 
       <View style={styles.toolbar}>
         <Link href="/settings" asChild>
@@ -163,6 +188,11 @@ const styles = StyleSheet.create({
   serverHint: {
     ...typography.caption,
     color: colors.muted
+  },
+  vitalsLine: {
+    ...typography.caption,
+    color: colors.onDarkSoft,
+    marginTop: spacing.md
   },
   error: {
     ...typography.bodySm,

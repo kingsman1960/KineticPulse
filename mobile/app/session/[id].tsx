@@ -92,6 +92,25 @@ export default function SessionScreen() {
         <SpecRow label="Subject" value={sessionMeta?.subject_id} />
         <SpecRow label="Location" value={sessionMeta?.location} />
         <SpecRow label="Reason" value={sessionMeta?.reason} />
+        <SpecRow
+          label="Heart rate"
+          value={
+            sessionMeta?.heart_rate_bpm == null
+              ? undefined
+              : `${sessionMeta.heart_rate_bpm} BPM`
+          }
+        />
+        <SpecRow label="HR signature" value={sessionMeta?.hr_signature ?? undefined} />
+        <SpecRow
+          label="Accel"
+          value={
+            sessionMeta?.accel_magnitude_g == null
+              ? undefined
+              : `${sessionMeta.accel_magnitude_g.toFixed(2)} g`
+          }
+        />
+        <SpecRow label="Accel signature" value={sessionMeta?.accel_signature ?? undefined} />
+        <SpecRow label="Voice" value={sessionMeta?.extra?.voice_verdict} />
         <SpecRow label="Detector" value={sessionMeta?.detector_class} />
         <SpecRow label="Action" value={sessionMeta?.action_class} />
         <SpecRow

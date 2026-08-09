@@ -33,6 +33,10 @@ class WebrtcSessionMeta:
     detector_class: Optional[str] = None
     action_class: Optional[str] = None
     action_confidence: Optional[float] = None
+    heart_rate_bpm: Optional[int] = None
+    hr_signature: Optional[str] = None
+    accel_magnitude_g: Optional[float] = None
+    accel_signature: Optional[str] = None
     extra: Dict[str, Any] = field(default_factory=dict)
 
     def as_dict(self) -> Dict[str, Any]:

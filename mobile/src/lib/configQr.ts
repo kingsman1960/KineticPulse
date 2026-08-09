@@ -7,6 +7,7 @@ export type CaregiverConfigQrV1 = {
   signalingWsBase: string;
   caregiverToken: string;
   iceServersText?: string;
+  monitoringHttpBase?: string;
 };
 
 function isNonEmptyString(v: unknown): v is string {
@@ -18,7 +19,8 @@ function fromV1(obj: CaregiverConfigQrV1): AppSettings {
     signalingHttpBase: obj.signalingHttpBase.trim(),
     signalingWsBase: obj.signalingWsBase.trim(),
     caregiverToken: obj.caregiverToken.trim(),
-    iceServersText: (obj.iceServersText ?? DEFAULT_SETTINGS.iceServersText).trim()
+    iceServersText: (obj.iceServersText ?? DEFAULT_SETTINGS.iceServersText).trim(),
+    monitoringHttpBase: (obj.monitoringHttpBase ?? "").trim()
   };
 }
 
@@ -81,7 +83,8 @@ function parseEnvLines(text: string): AppSettings | null {
     signalingHttpBase: http,
     signalingWsBase: ws,
     caregiverToken: token,
-    iceServersText: DEFAULT_SETTINGS.iceServersText
+    iceServersText: DEFAULT_SETTINGS.iceServersText,
+    monitoringHttpBase: (map.KINETICPULSE_MONITORING_HTTP_URL ?? "").trim()
   };
 }
 

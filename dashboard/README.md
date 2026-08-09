@@ -140,10 +140,10 @@ Allowed emergency levels are the existing values `none`, `tier_0_dismiss`,
 `tier_1_verify`, `tier_2_seizure`, and `tier_2_cardiac`. Vision classes are
 `fallen`, `falling`, `stand`, and `sitting`; `null` means no camera result.
 
-Jetson `MonitoringPublisher` fills `system`, `sensor` (TCP/BLE/mock link), and
-`snapshot` from `FusionEngine.latest`. Voice / alert-dispatch progress and rich
-`events[]` are still stubbed (`not_required` / `idle` / `[]`); the dashboard SQLite
-store builds history from polled snapshots.
+Jetson `MonitoringPublisher` fills `system`, `sensor`, `snapshot` from
+`FusionEngine.latest`, plus live `voice` / `alert_dispatch` / `events` from
+`CaregiverRuntimeStatus` (updated by the emergency dispatch worker).
+
 
 ## SQLite operational history
 

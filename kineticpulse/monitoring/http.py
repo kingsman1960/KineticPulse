@@ -10,10 +10,11 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from kineticpulse.config import AlertsConfig
 from kineticpulse.fusion.engine import FusionSnapshot
+from kineticpulse.runtime_status import CaregiverRuntimeStatus
 from kineticpulse.utils.logging import get_logger
 from kineticpulse.utils.timing import now_ms
 
@@ -45,9 +46,11 @@ def build_monitoring_payload(
     sensors: Any = None,
     voice_status: str = "not_required",
     alert_dispatch_status: str = "idle",
+    events: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """Build the JSON envelope consumed by the Next.js real-mode adapter."""
     sensor_conn = _sensor_connection(sensors)
+    event_list = list(events or [])
     if snapshot is None:
         return {
             "subject_id": alerts.subject_id,
@@ -73,7 +76,7 @@ def build_monitoring_payload(
             },
             "voice": {"status": voice_status},
             "alert_dispatch": {"status": alert_dispatch_status},
-            "events": [],
+            "events": event_list,
         }
 
     return {
@@ -100,7 +103,7 @@ def build_monitoring_payload(
         },
         "voice": {"status": voice_status},
         "alert_dispatch": {"status": alert_dispatch_status},
-        "events": [],
+        "events": event_list,
     }
 
 
@@ -115,12 +118,14 @@ class MonitoringPublisher:
         alerts: AlertsConfig,
         latest_snapshot: Callable[[], Optional[FusionSnapshot]],
         sensors: Any = None,
+        runtime_status: Optional[CaregiverRuntimeStatus] = None,
     ) -> None:
         self.host = host
         self.port = port
         self.alerts = alerts
         self.latest_snapshot = latest_snapshot
         self.sensors = sensors
+        self.runtime_status = runtime_status or CaregiverRuntimeStatus()
         self._server: Optional[asyncio.AbstractServer] = None
         self._stop = asyncio.Event()
 
@@ -174,11 +179,15 @@ class MonitoringPublisher:
             await self._respond(writer, 404, b'{"ok":false,"error":"not_found"}')
             return
 
+        status = self.runtime_status
         body = json.dumps(
             build_monitoring_payload(
                 alerts=self.alerts,
                 snapshot=self.latest_snapshot(),
                 sensors=self.sensors,
+                voice_status=status.voice_status,
+                alert_dispatch_status=status.alert_dispatch_status,
+                events=status.events_payload(),
             ),
             separators=(",", ":"),
         ).encode("utf-8")

@@ -36,8 +36,10 @@ from kineticpulse.config import RuntimeConfig, load_config
 from kineticpulse.fusion.engine import FusionEngine, FusionSnapshot
 from kineticpulse.fusion.tiers import EmergencyTier
 from kineticpulse.monitoring import MonitoringPublisher
+from kineticpulse.runtime_status import CaregiverRuntimeStatus
 from kineticpulse.sensors import build_sensor_client
 from kineticpulse.sensors.parser import SensorEvent
+from kineticpulse.webrtc.session_meta import build_session_meta
 from kineticpulse.temporal.stgcn import KeypointRingBuffer, TemporalHead
 from kineticpulse.temporal.types import ActionLogits
 from kineticpulse.utils.logging import configure_logging, get_logger
@@ -185,6 +187,7 @@ async def _dispatch_worker(
     snapshots_q: "asyncio.Queue[FusionSnapshot]",
     args: argparse.Namespace,
     stop: asyncio.Event,
+    runtime_status: CaregiverRuntimeStatus,
 ) -> None:
     dispatcher = WebhookDispatcher(cfg.alerts.webhooks)
     prompt_player = PromptPlayer()
@@ -198,6 +201,20 @@ async def _dispatch_worker(
 
     cooldown_ms = 8_000           # do not retrigger Tier 1 within this window
     last_tier_at_ms = 0
+
+    async def _dispatch_alert(payload) -> str:
+        runtime_status.set_alert("pending")
+        status = await dispatcher.dispatch(payload)
+        runtime_status.set_alert(status)
+        session_id = (payload.session or {}).get("id", "")
+        runtime_status.push_event(
+            severity="critical" if status == "failed" else "warning",
+            category="alert",
+            title=f"Alert dispatch {status}",
+            detail=f"tier={payload.tier} session={session_id}",
+            timestamp_ms=payload.timestamp_ms,
+        )
+        return status
 
     try:
         async def _safe_webrtc_start(*, snap: FusionSnapshot, session_id: str, session_meta: WebrtcSessionMeta) -> None:
@@ -226,29 +243,39 @@ async def _dispatch_worker(
 
             log.warning("Emergency tier=%s scenario=%s reason=%s",
                         tier.value, snap.decision.scenario, snap.decision.reason)
+            runtime_status.push_event(
+                severity="critical" if tier.bypasses_voice else "warning",
+                category="fusion",
+                title=f"Emergency {tier.value}",
+                detail=snap.decision.reason,
+                timestamp_ms=snap.timestamp_ms,
+            )
 
             if tier.bypasses_voice:
+                runtime_status.set_voice("not_required")
                 session_id = f"{cfg.webrtc.session_id_prefix}-{uuid.uuid4().hex[:12]}"
                 payload = build_payload(cfg.alerts, snap, session_id=session_id)
-                session_meta = WebrtcSessionMeta(
+                session_meta = build_session_meta(
                     session_id=session_id,
-                    timestamp_ms=snap.timestamp_ms,
-                    tier=tier.value,
-                    scenario=snap.decision.scenario,
                     subject_id=cfg.alerts.subject_id,
                     location=cfg.alerts.location,
-                    reason=snap.decision.reason,
-                    detector_class=snap.detector_class,
-                    action_class=snap.action_class,
-                    action_confidence=snap.action_conf,
+                    snapshot=snap,
                 )
                 await asyncio.gather(
-                    dispatcher.dispatch(payload),
+                    _dispatch_alert(payload),
                     _safe_webrtc_start(snap=snap, session_id=session_id, session_meta=session_meta),
                 )
                 continue
 
             # Tier 1: voice verification.
+            runtime_status.set_voice("pending")
+            runtime_status.push_event(
+                severity="info",
+                category="voice",
+                title="Voice verification started",
+                detail=cfg.voice.prompt_text,
+                timestamp_ms=snap.timestamp_ms,
+            )
             prompt_player.say(cfg.voice.prompt_text)
             result = await stt.listen_once(duration_s=cfg.voice.verify_timeout_s)
             verdict, matched = classify_response(
@@ -258,9 +285,18 @@ async def _dispatch_worker(
             )
             log.info("STT: text=%r verdict=%s matched=%r",
                      result.text, verdict.value, matched)
+            runtime_status.set_voice(verdict.value)
+            runtime_status.push_event(
+                severity="info" if verdict == VoiceVerdict.SAFE else "warning",
+                category="voice",
+                title=f"Voice verdict: {verdict.value}",
+                detail=result.text or "(silence / no transcript)",
+                timestamp_ms=snap.timestamp_ms,
+            )
 
             if verdict == VoiceVerdict.SAFE:
                 log.info("Subject confirmed safe; alert canceled.")
+                runtime_status.set_alert("idle")
                 continue
 
             voice_extra = {
@@ -272,21 +308,15 @@ async def _dispatch_worker(
             payload = build_payload(
                 cfg.alerts, snap, voice_extra=voice_extra, session_id=session_id
             )
-            session_meta = WebrtcSessionMeta(
+            session_meta = build_session_meta(
                 session_id=session_id,
-                timestamp_ms=snap.timestamp_ms,
-                tier=tier.value,
-                scenario=snap.decision.scenario,
                 subject_id=cfg.alerts.subject_id,
                 location=cfg.alerts.location,
-                reason=snap.decision.reason,
-                detector_class=snap.detector_class,
-                action_class=snap.action_class,
-                action_confidence=snap.action_conf,
+                snapshot=snap,
                 extra={"voice_verdict": verdict.value},
             )
             await asyncio.gather(
-                dispatcher.dispatch(payload),
+                _dispatch_alert(payload),
                 _safe_webrtc_start(snap=snap, session_id=session_id, session_meta=session_meta),
             )
     finally:
@@ -354,6 +384,7 @@ async def run(args: argparse.Namespace) -> int:
         except NotImplementedError:
             pass
 
+    runtime_status = CaregiverRuntimeStatus()
     monitoring: Optional[MonitoringPublisher] = None
     if cfg.monitoring.enabled:
         monitoring = MonitoringPublisher(
@@ -362,6 +393,7 @@ async def run(args: argparse.Namespace) -> int:
             alerts=cfg.alerts,
             latest_snapshot=lambda: fusion.latest,
             sensors=sensors,
+            runtime_status=runtime_status,
         )
 
     tasks = [
@@ -370,7 +402,10 @@ async def run(args: argparse.Namespace) -> int:
         asyncio.create_task(_vision_worker(
             cfg, detector, pose, detections_q, features_q, actions_q, stop, args.no_camera,
         ), name="vision"),
-        asyncio.create_task(_dispatch_worker(cfg, snapshots_q, args, stop), name="dispatch"),
+        asyncio.create_task(
+            _dispatch_worker(cfg, snapshots_q, args, stop, runtime_status),
+            name="dispatch",
+        ),
     ]
     if monitoring is not None:
         tasks.append(asyncio.create_task(monitoring.run(), name="monitoring"))

@@ -54,6 +54,7 @@ def main() -> int:
         "signalingWsBase": f"ws://{host}:{port}/ws",
         "caregiverToken": token,
         "iceServersText": "stun:stun.l.google.com:19302",
+        "monitoringHttpBase": f"http://{host}:8790/monitoring",
     }
     json_path = handoff / "caregiver-config.json"
     json_path.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")

@@ -35,20 +35,28 @@ class WebhookDispatcher:
         self._client = httpx.AsyncClient(timeout=self.timeout_s, http2=True)
         return self._client
 
-    async def dispatch(self, payload: AlertPayload) -> None:
+    async def dispatch(self, payload: AlertPayload) -> str:
+        """Fan-out alerts. Returns ``idle`` | ``sent`` | ``failed`` for monitoring UI."""
         if not self.webhooks:
             log.info("No enabled webhooks; payload would be: %s", payload.as_json())
-            return
+            return "idle"
         client = await self._get_client()
         coros = [self._send_one(client, w, payload) for w in self.webhooks]
-        await asyncio.gather(*coros, return_exceptions=True)
+        results = await asyncio.gather(*coros, return_exceptions=True)
+        ok = True
+        for result in results:
+            if isinstance(result, Exception) or result is False:
+                ok = False
+        return "sent" if ok else "failed"
 
-    async def _send_one(self, client, wh: WebhookConfig, payload: AlertPayload) -> None:
+    async def _send_one(self, client, wh: WebhookConfig, payload: AlertPayload) -> bool:
         try:
             resp = await client.post(wh.url, headers=wh.headers, json=payload.as_json())
             log.info("Webhook %s -> %s (%d)", wh.name, wh.url, resp.status_code)
+            return 200 <= resp.status_code < 300
         except Exception as exc:
             log.warning("Webhook %s failed: %s", wh.name, exc)
+            return False
 
     async def aclose(self) -> None:
         if self._client is not None:

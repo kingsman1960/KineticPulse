@@ -2,7 +2,8 @@
 
 Step-by-step instructions for installing and running **KineticPulse Pipeline 2** on an **Nvidia Jetson** (Jetson Linux / Ubuntu). Intended for team members deploying to edge hardware for academic development.
 
-For system topology (signaling, WebRTC, wristband TCP), see [SERVER_ARCHITECTURE.md](SERVER_ARCHITECTURE.md).
+For system topology (signaling, WebRTC, wristband TCP), see [SERVER_ARCHITECTURE.md](SERVER_ARCHITECTURE.md).  
+Lab demo path (Jetson + ESP32 + phone + dashboard): [E2E_LAB.md](E2E_LAB.md). Wristband wire format: [TCP_CONTRACT.md](TCP_CONTRACT.md).
 
 ---
 
@@ -469,6 +470,8 @@ See [SERVER_ARCHITECTURE.md](SERVER_ARCHITECTURE.md) and [WEBRTC_ROLLOUT.md](WEB
 | [SERVER_ARCHITECTURE.md](SERVER_ARCHITECTURE.md) | Signaling, WebRTC, TCP wristband topology |
 | [WEBRTC_ROLLOUT.md](WEBRTC_ROLLOUT.md) | Production WebRTC / TURN checklist |
 | [dashboard/README.md](../dashboard/README.md) | Caregiver dashboard + signaling server |
+| [E2E_LAB.md](E2E_LAB.md) | Full lab checklist (wristband + APK + dashboard real) |
+| [TCP_CONTRACT.md](TCP_CONTRACT.md) | ESP32 ↔ Jetson NDJSON events |
 | [config.example.yaml](../config.example.yaml) | Full runtime config reference |
 
 ---

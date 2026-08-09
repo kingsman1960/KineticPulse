@@ -68,6 +68,14 @@ export default function SettingsScreen() {
           placeholder="CAREGIVER_SIGNAL_TOKEN"
         />
         <TextField
+          label="Monitoring URL (live vitals)"
+          value={form.monitoringHttpBase ?? ""}
+          onChangeText={(v) => update("monitoringHttpBase", v)}
+          autoCapitalize="none"
+          placeholder="http://100.x.x.x:8790/monitoring"
+          hint="Optional. Defaults to signaling host on port 8790."
+        />
+        <TextField
           label="ICE servers"
           value={form.iceServersText}
           onChangeText={(v) => update("iceServersText", v)}

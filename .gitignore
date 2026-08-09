@@ -121,5 +121,6 @@ config.yaml
 deploy/.env.deploy
 deploy/handoff/
 secrets/
+src/wifi_secrets.h
 *.pem
 *.key

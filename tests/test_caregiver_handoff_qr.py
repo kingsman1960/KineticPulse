@@ -31,3 +31,4 @@ def test_caregiver_config_qr_v1_roundtrip():
         assert obj["signalingHttpBase"] == "http://100.64.0.5:8787"
         assert obj["signalingWsBase"] == "ws://100.64.0.5:8787/ws"
         assert obj["caregiverToken"] == "care-secret"
+        assert obj["monitoringHttpBase"] == "http://100.64.0.5:8790/monitoring"

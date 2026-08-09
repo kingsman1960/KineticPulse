@@ -640,10 +640,13 @@ Status legend: **Done** = merged to `main` and verified · **In Progress** = act
 | Headless caregiver QR (`signaling-server.js` `/handoff`, `setup.html`, SSH/SCP flow in `JETSON_DEPLOY.md`) | Youngwon Cho | **Done** |
 | Deploy checkpoint weights in private repo (`best.pt`, `tsstg-model.pth`; `.gitignore` exceptions) | Youngwon Cho | **Done** |
 | Caregiver handoff contract test (`tests/test_caregiver_handoff_qr.py`) | Youngwon Cho | **Done** |
+| Live monitoring status (voice / alert_dispatch / events → `/monitoring`) | Youngwon Cho | **Done** |
+| WebRTC session meta vitals + dashboard/mobile caregiver UI parity | Youngwon Cho | **Done** |
 | Developer manual — primary author (`docs/MANUAL.md`) | Youngwon Cho | **Done** |
 | Webhook dispatcher behaviour tests (`tests/test_webhooks.py`, PR #1) | Yuanhao Chen | **Done** |
 | TCP wristband simulator + contract tests (`scripts/tcp_wristband_simulator.py`) | Chang-Ting Zhong | In Progress |
-| ESP32 TCP telemetry wire-format documentation (`docs/TCP_CONTRACT.md`) | Chang-Ting Zhong | In Progress |
+| ESP32 TCP telemetry wire-format documentation (`docs/TCP_CONTRACT.md`) | Youngwon Cho / Chang-Ting Zhong | **Done** |
+| Lab end-to-end checklist (`docs/E2E_LAB.md`) | Youngwon Cho | **Done** |
 | CSI / RTSP camera bring-up on Jetson Orin Nano | Ren-Yi Huang | Pending |
 | Phase 1 checkpoint training + metrics report on `dataset/_merged` | Ren-Yi Huang | Pending |
 | Detector `falling` recall pass — mid-fall transition frame collection | Chang-Ting Zhong | Pending |
@@ -658,6 +661,7 @@ Status legend: **Done** = merged to `main` and verified · **In Progress** = act
 | ESP32-S3 PlatformIO development environment (`platformio.ini`, PR #2) | Hao-Yuan Weng | **Done** |
 | I2C bus scanner firmware test (`src/i2c_scanner.cpp`, PR #2) | Hao-Yuan Weng | **Done** |
 | ESP32 TCP client prototype — fake HR JSON telemetry (`src/main.cpp`, PR #2) | Hao-Yuan Weng | **Done** |
+| ESP32 TCP client aligned to Jetson NDJSON contract (`hr`/`accel`/`hello`, `docs/TCP_CONTRACT.md`) | Youngwon Cho | **Done** |
 | MAX30102 PPG sensor chip integration on wristband PCB | Hao-Yuan Weng | In Progress |
 | MAX30102 firmware driver — raw IR/Red FIFO streaming over TCP | Yule Xu | In Progress |
 | IMU accelerometer procurement + board integration | Yule Xu | Pending |

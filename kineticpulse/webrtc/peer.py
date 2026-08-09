@@ -247,16 +247,11 @@ class WebrtcPeer:
                 location=self.location,
                 reason="no snapshot",
             )
-        d = snapshot.decision
-        return WebrtcSessionMeta(
+        from kineticpulse.webrtc.session_meta import build_session_meta
+
+        return build_session_meta(
             session_id=session_id,
-            timestamp_ms=snapshot.timestamp_ms,
-            tier=d.tier.value,
-            scenario=d.scenario,
             subject_id=self.subject_id,
             location=self.location,
-            reason=d.reason,
-            detector_class=snapshot.detector_class,
-            action_class=snapshot.action_class,
-            action_confidence=snapshot.action_conf,
+            snapshot=snapshot,
         )

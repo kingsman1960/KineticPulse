@@ -12,6 +12,8 @@ type SessionSummary = {
     scenario?: string;
     subject_id?: string;
     location?: string;
+    heart_rate_bpm?: number | null;
+    hr_signature?: string | null;
   };
 };
 
@@ -64,8 +66,14 @@ export default function SessionsPage() {
             style={{ textDecoration: "none", color: "inherit", border: "1px solid #d1d5db", borderRadius: 12, padding: 14, background: "white" }}
           >
             <div style={{ fontWeight: 700 }}>{session.session_id}</div>
-            <div style={{ fontSize: 14, color: "#4b5563" }}>status={session.status} tier={session.meta?.tier ?? "n/a"} scenario={session.meta?.scenario ?? "n/a"}</div>
-            <div style={{ fontSize: 13, color: "#6b7280" }}>subject={session.meta?.subject_id ?? "unknown"} location={session.meta?.location ?? "unknown"}</div>
+            <div style={{ fontSize: 14, color: "#4b5563" }}>
+              status={session.status} tier={session.meta?.tier ?? "n/a"} scenario={session.meta?.scenario ?? "n/a"}
+              {session.meta?.heart_rate_bpm != null ? ` · HR ${session.meta.heart_rate_bpm} BPM` : ""}
+            </div>
+            <div style={{ fontSize: 13, color: "#6b7280" }}>
+              subject={session.meta?.subject_id ?? "unknown"} location={session.meta?.location ?? "unknown"}
+              {session.meta?.hr_signature ? ` · ${session.meta.hr_signature}` : ""}
+            </div>
           </Link>
         ))}
       </div>
