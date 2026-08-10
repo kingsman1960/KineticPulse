@@ -41,18 +41,16 @@ If the socket drops, firmware must reconnect. Jetson closes idle clients after `
 | `wristband.has_ppg_raw: true` | Expect `ppg` bursts (else use `hr`) |
 | `wristband.has_accelerometer: true` | Flip when real IMU is on the board |
 
-## Bring-up smoke
+## Laptop bring-up (same Wi-Fi as ESP32)
+
+Production host API: [`kineticpulse/sensors/tcp.py`](../kineticpulse/sensors/tcp.py) (`TcpSensorServer`).
+
+On a developer laptop:
 
 ```bash
-# Jetson
-./kineticpulse --mock-stt   # or full run; watch logs for TCP connect
-
-# ESP32 (after wifi_secrets.h)
-pio run -e seeed_xiao_esp32s3 -t upload && pio device monitor
-
-# Expect on Jetson:
-#   TCP: wristband connected from ...
-#   TCP: wristband hello device='esp32-kp-001' ...
+python scripts/tcp_wristband_host.py
 ```
 
-Dashboard (real mode) should show ESP32 connected + changing BPM within a few seconds.
+Then set `SERVER_IP` in `src/wifi_secrets.h` to the printed laptop IP, flash `seeed_xiao_esp32s3`, and watch HR/ACC lines.
+
+**Note:** ESP32 Arduino STA mode needs **WPA2-PSK** (phone hotspot / home router). Campus **eduroam** (WPA2-Enterprise) usually cannot be joined with `WiFi.begin(ssid, password)` alone.
