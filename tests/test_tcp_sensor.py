@@ -265,3 +265,26 @@ def test_tcp_server_ppg_burst_feeds_processor_without_crashing() -> None:
             await _shutdown(server, server_task)
 
     asyncio.run(_run())
+
+
+def test_tcp_server_drops_accel_when_flag_false() -> None:
+    async def _run() -> None:
+        cfg = _cfg(has_accel=False, has_ppg_raw=False)
+        server, server_task, queue, port = await _start_server(cfg)
+        try:
+            _reader, writer = await asyncio.open_connection("127.0.0.1", port)
+            writer.write(b'{"type":"hr","bpm":70}\n')
+            writer.write(b'{"type":"accel","ax":4.0,"ay":0.0,"az":1.0}\n')
+            await writer.drain()
+            events = await _drain(queue, want=2, timeout_s=1.0)
+            assert len(events) == 1
+            assert isinstance(events[0], HrSample) and events[0].bpm == 70
+            writer.close()
+            try:
+                await writer.wait_closed()
+            except Exception:
+                pass
+        finally:
+            await _shutdown(server, server_task)
+
+    asyncio.run(_run())

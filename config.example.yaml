@@ -79,7 +79,7 @@ wristband:
 
   # --- Hardware capability flags (transport-agnostic) ---
   # Reflect current build status. Flip to true as components are integrated.
-  has_accelerometer: false # MAX30102 + ESP32 are in progress; IMU not yet ordered.
+  has_accelerometer: true  # MPU6050 on the TCP firmware (50 Hz, ±8 g). Set false to drop accel lines.
   has_ppg_raw: true        # ESP32 firmware streams raw MAX30102 PPG samples to the
                            #   Jetson, which derives BPM via kineticpulse.sensors.ppg.
                            # Set to false if the firmware sends pre-computed HR (BPM)
@@ -102,13 +102,39 @@ thresholds:
   tremor_min_duration_s: 2.0
 
 voice:
-  enabled: true
-  verify_timeout_s: 10.0
-  prompt_text: "A fall has been detected. Are you okay?"
-  distress_words: ["help", "emergency", "save me", "hurt", "pain"]
-  safe_words: ["i am fine", "i'm fine", "im fine", "okay", "ok", "all good"]
-  stt_model: small.en
+  enabled: true              # false = skip the prompt and alert Tier 1 unverified
+  verify_timeout_s: 10.0     # critical vitals during this window override the reply
+  prompt_text: "A fall has been detected. Are you okay? Ein Sturz wurde erkannt. Geht es Ihnen gut?"
+  distress_words:
+    - help
+    - emergency
+    - save me
+    - hurt
+    - hurts
+    - pain
+    - hilfe
+    - notfall
+    - rettet mich
+    - weh
+    - schmerzen
+    - aua
+  safe_words:
+    - i am fine
+    - i'm fine
+    - im fine
+    - okay
+    - ok
+    - all good
+    - mir geht es gut
+    - mir gehts gut
+    - mir geht's gut
+    - ich bin okay
+    - ich bin ok
+    - alles gut
+    - alles in ordnung
+  stt_model: small           # multilingual Whisper; *.en cannot transcribe German
   stt_device: auto
+  stt_languages: [en, de]    # clamp auto-detect to these two; speaker language is unknown
 
 alerts:
   subject_id: subject-001

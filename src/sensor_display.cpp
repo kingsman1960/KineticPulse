@@ -14,13 +14,13 @@
 #include <Adafruit_SSD1306.h>
 #include "MAX30105.h"
 #include "heartRate.h"
+#include "mpu6050.h"
 
 #define I2C_SDA 5
 #define I2C_SCL 6
 #define SCREEN_W 128
 #define SCREEN_H 64
 #define OLED_ADDR 0x3C
-#define MPU_ADDR 0x68
 // ponytail: no onboard BAT sense on XIAO-S3 — wire 2x100k divider to this ADC or leave -1.
 #define BAT_ADC_PIN (-1)
 #define BAT_VMIN_MV 3300
@@ -37,46 +37,6 @@ static float beatsPerMinute = 0;
 static int beatAvg = 0;
 static bool ppgOk = false;
 static bool mpuOk = false;
-static uint8_t mpuWho = 0;
-
-static bool mpuWrite(uint8_t reg, uint8_t val) {
-  Wire.beginTransmission(MPU_ADDR);
-  Wire.write(reg);
-  Wire.write(val);
-  return Wire.endTransmission() == 0;
-}
-
-static bool mpuRead(uint8_t reg, uint8_t *buf, size_t n) {
-  Wire.beginTransmission(MPU_ADDR);
-  Wire.write(reg);
-  if (Wire.endTransmission(false) != 0) return false;
-  if (Wire.requestFrom((int)MPU_ADDR, (int)n) != (int)n) return false;
-  for (size_t i = 0; i < n; i++) buf[i] = Wire.read();
-  return true;
-}
-
-static bool mpuBegin() {
-  uint8_t who = 0;
-  if (!mpuRead(0x75, &who, 1)) return false;
-  mpuWho = who;
-  // 0x68 MPU6050; 0x71 MPU9250; 0x19 ICM-ish — wake still works for accel.
-  if (!mpuWrite(0x6B, 0x00)) return false;
-  delay(50);
-  return who != 0 && who != 0xFF;
-}
-
-static bool mpuAccelG(float *ax, float *ay, float *az) {
-  uint8_t raw[6];
-  if (!mpuRead(0x3B, raw, 6)) return false;
-  int16_t x = (int16_t)((raw[0] << 8) | raw[1]);
-  int16_t y = (int16_t)((raw[2] << 8) | raw[3]);
-  int16_t z = (int16_t)((raw[4] << 8) | raw[5]);
-  // ±2g default → 16384 LSB/g
-  *ax = x / 16384.0f;
-  *ay = y / 16384.0f;
-  *az = z / 16384.0f;
-  return true;
-}
 
 struct BatStatus {
   bool sensed;

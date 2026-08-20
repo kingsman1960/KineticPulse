@@ -292,11 +292,11 @@ class TemporalHead:
         if 30 < angle <= 60:
             falling_logit += 1.0
             sitting_logit += 0.5
-        if vel > 300.0 and angle > 20:
+        if vel > 0.75 and angle > 20:
             falling_logit += 1.5
         if angle < 30 and ar < 1.0:
             stand_logit += 2.0
-        if 25 <= angle <= 50 and 0.7 <= ar <= 1.1 and vel < 200.0:
+        if 25 <= angle <= 50 and 0.7 <= ar <= 1.1 and vel < 0.5:
             sitting_logit += 1.5
 
         logits = np.array(

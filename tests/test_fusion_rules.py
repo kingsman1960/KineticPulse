@@ -234,7 +234,7 @@ def test_sudden_seated_collapse_with_bradycardia_triggers_cardiac() -> None:
         detector_class="sitting",
         torso_angle_deg=65.0,
         aspect_ratio=0.9,
-        centroid_vel_pps=450.0,
+        centroid_vel_pps=1.2,
     )
     assert pose == PoseSignature.FALLING
 
@@ -248,6 +248,56 @@ def test_sudden_seated_collapse_with_bradycardia_triggers_cardiac() -> None:
     assert decision.tier == EmergencyTier.TIER_2_CARDIAC
     assert decision.scenario == "C"
     assert decision.tier.bypasses_voice
+
+
+def test_walking_wrist_swing_is_quiet_not_soft_collapse() -> None:
+    """Arm swing peaks around 2 g continuously. That used to match
+    SOFT_COLLAPSE (peak in [1.8, 3)); the tail is still moving so it
+    must stay QUIET."""
+    samples: List[AccelSample] = []
+    hz, total_s = 50, 2.0
+    for i in range(int(total_s * hz)):
+        t = i / hz
+        swing = 1.6 * math.sin(2 * math.pi * 2.0 * t)
+        samples.append(AccelSample(swing, 0.4, 1.0, i * int(1000 / hz)))
+    peak = max(s.magnitude_g for s in samples)
+    assert peak >= 1.8
+    assert accel_signature(samples, _thresholds()) == AccelSignature.QUIET
+
+
+def test_tremor_signature_needs_window_longer_than_min_duration() -> None:
+    """FusionEngine used to pass a 2 s slice while tremor_min is 2 s, so
+    the post-impact tail could never qualify. A 4 s window that still
+    contains the impact does; a 2 s slice of the same recording does not.
+    """
+    samples = _accel_impact_then_tremor(total_s=4.0)
+    end = samples[-1].timestamp_ms
+    short = [s for s in samples if s.timestamp_ms >= end - 2000]
+    long = [s for s in samples if s.timestamp_ms >= end - 4000]
+    assert accel_signature(short, _thresholds()) != AccelSignature.IMPACT_TREMOR
+    assert accel_signature(long, _thresholds()) == AccelSignature.IMPACT_TREMOR
+
+
+def test_still_bbox_jitter_does_not_promote_stand_to_falling() -> None:
+    pose = pose_signature(
+        detector_class="stand",
+        torso_angle_deg=50.0,
+        aspect_ratio=0.8,
+        centroid_vel_pps=1.5,
+        stillness=0.95,
+    )
+    assert pose == PoseSignature.UPRIGHT
+
+
+def test_fallen_fidget_with_mid_torso_is_false_positive() -> None:
+    pose = pose_signature(
+        detector_class="fallen",
+        torso_angle_deg=40.0,
+        aspect_ratio=0.9,
+        centroid_vel_pps=0.2,
+        stillness=0.1,
+    )
+    assert pose == PoseSignature.FALSE_POSITIVE
 
 
 # --------------------------------------------------------------------------- #

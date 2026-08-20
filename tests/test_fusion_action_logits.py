@@ -28,6 +28,7 @@ from kineticpulse.fusion.rules import (
 from kineticpulse.fusion.tiers import EmergencyTier, classify
 from kineticpulse.sensors.parser import AccelSample, HrSample, SensorEvent
 from kineticpulse.temporal.types import ActionLogits
+from kineticpulse.utils.timing import now_ms
 from kineticpulse.vision.detector import Detection, PostureClass
 from kineticpulse.vision.features import PoseFeatures
 
@@ -235,3 +236,12 @@ def test_fusion_engine_works_without_actions_queue_legacy():
     snap = asyncio.run(_scenario())
     assert snap.action_class is None
     assert snap.action_conf is None
+
+
+def test_snapshot_reports_peak_accel_not_last_sample() -> None:
+    engine, *_rest = _build_engine_with_queues()
+    ts = now_ms()
+    engine._accel.append(AccelSample(4.0, 0.0, 0.0, ts - 40))
+    engine._accel.append(AccelSample(0.0, 0.0, 1.0, ts))
+    snap = engine._build_snapshot()
+    assert snap.latest_accel_g == pytest.approx(4.0, rel=1e-3)

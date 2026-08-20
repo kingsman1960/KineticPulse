@@ -15,7 +15,7 @@ import asyncio
 import threading
 import time
 from dataclasses import dataclass
-from typing import Optional
+from typing import Iterable, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -24,6 +24,26 @@ from kineticpulse.utils.logging import get_logger
 from kineticpulse.utils.timing import now_ms
 
 log = get_logger(__name__)
+
+
+def pick_stt_language(
+    all_language_probs: Iterable[Tuple[str, float]],
+    allowed: Sequence[str],
+) -> Optional[str]:
+    """Return the highest-scoring language that is in ``allowed``.
+
+    Used so a short German ``Hilfe`` is not transcribed as Dutch. An empty
+    ``allowed`` list means "do not pin" (Whisper auto-detects).
+    """
+    if not allowed:
+        return None
+    if len(allowed) == 1:
+        return allowed[0]
+    scores = {lang: 0.0 for lang in allowed}
+    for lang, prob in all_language_probs:
+        if lang in scores:
+            scores[lang] = float(prob)
+    return max(scores, key=scores.get)
 
 
 @dataclass
@@ -37,7 +57,7 @@ class SttResult:
 
 
 class WhisperStt:
-    """``faster-whisper`` based STT (Whisper small.en by default)."""
+    """``faster-whisper`` based STT (multilingual ``small`` by default)."""
 
     def __init__(self, cfg: VoiceConfig) -> None:
         self.cfg = cfg
@@ -63,7 +83,7 @@ class WhisperStt:
     async def listen_once(self, duration_s: Optional[float] = None) -> SttResult:
         """Record from the default microphone and transcribe."""
         try:
-            import sounddevice as sd
+            import sounddevice  # noqa: F401  - fail fast before we touch a thread
         except ImportError as exc:
             raise ImportError(
                 "sounddevice not installed. Install it, or run with --mock-stt."
@@ -73,18 +93,54 @@ class WhisperStt:
         timeout = float(duration_s or self.cfg.verify_timeout_s)
         sample_rate = 16000
         log.info("STT: recording up to %.1fs of audio", timeout)
+
+        # Both the capture and the transcription must run off the event loop:
+        # sd.wait() blocks for the whole verify window, which would stall the
+        # fusion engine, the wristband TCP server and the mid-verification
+        # vitals override along with it.
+        loop = asyncio.get_event_loop()
+        audio = await loop.run_in_executor(None, self._record, timeout, sample_rate)
+        return await loop.run_in_executor(None, self._transcribe, audio, sample_rate)
+
+    @staticmethod
+    def _record(timeout: float, sample_rate: int) -> np.ndarray:
+        import sounddevice as sd
+
         audio = sd.rec(int(timeout * sample_rate), samplerate=sample_rate,
                        channels=1, dtype="float32")
         sd.wait()
-        audio = np.asarray(audio).reshape(-1)
+        return np.asarray(audio).reshape(-1)
 
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, self._transcribe, audio, sample_rate)
+    def _resolve_language(self, audio: np.ndarray) -> Optional[str]:
+        """Pin transcription to English or German, whichever scores higher.
+
+        Unconstrained Whisper auto-detect on a 10 s reply will happily pick
+        Dutch or Afrikaans for a short ``Hilfe``. English-only ``*.en``
+        checkpoints cannot transcribe German at all, so those stay pinned.
+        """
+        if self.cfg.stt_model.endswith(".en"):
+            return "en"
+        allowed = [str(x).strip() for x in (self.cfg.stt_languages or []) if str(x).strip()]
+        if len(allowed) == 1:
+            return allowed[0]
+        if not allowed:
+            return None
+        try:
+            _lang, _prob, all_probs = self._model.detect_language(audio)
+        except Exception as exc:
+            log.warning("STT language detection failed (%s); auto-detecting.", exc)
+            return None
+        picked = pick_stt_language(all_probs, allowed)
+        log.info("STT: language=%s (from %s)", picked, ",".join(allowed))
+        return picked
 
     def _transcribe(self, audio: np.ndarray, sample_rate: int) -> SttResult:
         with self._lock:
             t0 = time.monotonic()
-            segments, info = self._model.transcribe(audio, language="en", beam_size=1)
+            language = self._resolve_language(audio)
+            segments, info = self._model.transcribe(
+                audio, language=language, beam_size=1,
+            )
             text_parts = []
             for seg in segments:
                 text_parts.append(seg.text)
