@@ -74,6 +74,7 @@ def _parse_event(
     *,
     timestamp_ms: int,
     ppg_processor: Optional[PpgProcessor],
+    has_accelerometer: bool = True,
 ) -> List[SensorEvent]:
     """Translate one decoded JSON object into zero or more SensorEvents.
 
@@ -91,6 +92,8 @@ def _parse_event(
         return [HrSample(bpm=bpm, timestamp_ms=timestamp_ms)]
 
     if et == "accel":
+        if not has_accelerometer:
+            return []
         try:
             ax = float(obj["ax"])
             ay = float(obj["ay"])
@@ -252,7 +255,12 @@ class TcpSensorServer:
                     continue
 
                 ts = now_ms()
-                for ev in _parse_event(obj, timestamp_ms=ts, ppg_processor=self._ppg_processor):
+                for ev in _parse_event(
+                    obj,
+                    timestamp_ms=ts,
+                    ppg_processor=self._ppg_processor,
+                    has_accelerometer=self.cfg.has_accelerometer,
+                ):
                     self._submit(ev)
         finally:
             try:

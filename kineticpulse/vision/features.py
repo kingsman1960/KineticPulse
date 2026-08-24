@@ -5,7 +5,7 @@ geometric features used by the rule-based fusion engine:
 
 - Torso angle (deg) - 0 = upright, 90 = horizontal.
 - Bounding-box aspect ratio (width / height) - tall person -> < 1, lying -> > 1.
-- Centroid vertical velocity (pixels / second).
+- Centroid vertical velocity (body-lengths / second).
 - Keypoint stillness (variance over the last N samples).
 
 All functions accept ``None`` keypoints gracefully so callers can wire
@@ -35,7 +35,7 @@ class PoseFeatures:
 
     torso_angle_deg: Optional[float]    # 0 = upright, 90 = horizontal
     aspect_ratio: Optional[float]       # bbox w / h; None if bbox missing
-    centroid_vel_pps: Optional[float]   # signed: positive = falling downward
+    centroid_vel_pps: Optional[float]   # body-lengths/s; positive = downward
     stillness: Optional[float]          # 0 = motion; large = still
     timestamp_ms: int
 
@@ -86,16 +86,21 @@ def centroid_velocity(
     prev_centroid: Optional[Sequence[float]],
     curr_centroid: Optional[Sequence[float]],
     dt_ms: float,
+    bbox_height_px: Optional[float] = None,
 ) -> Optional[float]:
-    """Vertical velocity in pixels/second.
+    """Vertical velocity in body-lengths / second (pixels/s if height missing).
 
     Positive means the subject is moving downward in image space (which is
-    what we want to detect as "falling").
+    what we want to detect as "falling"). Dividing by bbox height makes the
+    value independent of camera distance.
     """
     if prev_centroid is None or curr_centroid is None or dt_ms <= 0:
         return None
     dy_px = float(curr_centroid[1] - prev_centroid[1])
-    return dy_px * (1000.0 / dt_ms)
+    vel_pps = dy_px * (1000.0 / dt_ms)
+    if bbox_height_px is not None and bbox_height_px > 1.0:
+        return vel_pps / bbox_height_px
+    return vel_pps
 
 
 def keypoint_stillness(history: Sequence[np.ndarray], conf_threshold: float = 0.3) -> Optional[float]:
@@ -147,7 +152,8 @@ def extract_features(
         curr_cx = (pose.bbox_xyxy[0] + pose.bbox_xyxy[2]) / 2.0
         curr_cy = (pose.bbox_xyxy[1] + pose.bbox_xyxy[3]) / 2.0
         dt_ms = pose.timestamp_ms - prev_pose.timestamp_ms
-        vel = centroid_velocity((prev_cx, prev_cy), (curr_cx, curr_cy), dt_ms)
+        h = float(pose.bbox_xyxy[3] - pose.bbox_xyxy[1])
+        vel = centroid_velocity((prev_cx, prev_cy), (curr_cx, curr_cy), dt_ms, h)
 
     still = keypoint_stillness(history)
 

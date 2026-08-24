@@ -17,6 +17,17 @@ from kineticpulse.config import ThresholdsConfig
 from kineticpulse.sensors.parser import AccelSample, HrSample, PulseLost, SensorEvent
 from kineticpulse.temporal.types import ActionLogits
 
+# ponytail: centroid_vel is bbox-normalized (body-lengths / s). ~1.0 is a
+# full-height drop in one second. Upgrade: per-camera calibration.
+_FALL_VEL_BLS = 1.0
+_SIT_COLLAPSE_VEL_BLS = 0.85
+_STILLNESS_HIGH = 0.7   # 1/(1+std); still window in tests is > 0.9
+_STILLNESS_LOW = 0.3    # moving window in tests is < 0.2
+_SOFT_COLLAPSE_G = 1.8
+_SOFT_COLLAPSE_MIN_S = 0.3
+_TAIL_STILL_MS = 400
+_AC_QUIET = 0.15
+
 
 # --------------------------------------------------------------------------- #
 # Pose signature
@@ -41,6 +52,7 @@ def pose_signature(
     centroid_vel_pps: Optional[float],
     action_logits: Optional[ActionLogits] = None,
     action_confidence_threshold: float = 0.55,
+    stillness: Optional[float] = None,
 ) -> PoseSignature:
     """Combine the detector class with the pose-feature triple.
 
@@ -76,17 +88,25 @@ def pose_signature(
             ax = action_logits.argmax_label
             if action_logits.confidence_of(ax) >= action_confidence_threshold:
                 effective_class = ax
+    still = stillness is not None and stillness >= _STILLNESS_HIGH
+    fidgeting = stillness is not None and stillness < _STILLNESS_LOW
+
     cls = (effective_class or "").lower()
     if cls == "fallen":
         if (torso_angle_deg is not None and torso_angle_deg < 30
                 and (aspect_ratio is None or aspect_ratio < 1.0)):
             return PoseSignature.UPRIGHT
+        # Detector says fallen but the skeleton is fidgeting upright-ish —
+        # not a grounded body. Horizontal + moving stays PRONE (seizure).
+        if fidgeting and torso_angle_deg is not None and torso_angle_deg < 50:
+            return PoseSignature.FALSE_POSITIVE
         return PoseSignature.PRONE
     if cls == "falling":
         return PoseSignature.FALLING
     if cls == "stand":
-        if (centroid_vel_pps is not None and centroid_vel_pps > 400.0
-                and torso_angle_deg is not None and torso_angle_deg > 45):
+        if (centroid_vel_pps is not None and centroid_vel_pps > _FALL_VEL_BLS
+                and torso_angle_deg is not None and torso_angle_deg > 45
+                and not still):
             return PoseSignature.FALLING
         if (torso_angle_deg is not None and torso_angle_deg > 70
                 and aspect_ratio is not None and aspect_ratio > 1.0):
@@ -94,8 +114,10 @@ def pose_signature(
         return PoseSignature.UPRIGHT
     if cls == "sitting":
         # Sudden seated drop with marked tilt - possible syncope.
-        if (centroid_vel_pps is not None and centroid_vel_pps > 350.0
-                and torso_angle_deg is not None and torso_angle_deg > 50):
+        # High stillness = bbox jitter, not a collapse.
+        if (centroid_vel_pps is not None and centroid_vel_pps > _SIT_COLLAPSE_VEL_BLS
+                and torso_angle_deg is not None and torso_angle_deg > 50
+                and not still):
             return PoseSignature.FALLING
         # Otherwise sitting is just a non-fall posture; fusion treats it the
         # same as standing for Scenario D dismissal but the engine still
@@ -142,6 +164,22 @@ def _ac_amplitude(window: Sequence[AccelSample]) -> float:
     return sum(deviations) / len(deviations)
 
 
+def _is_soft_collapse(window: Sequence[AccelSample], peak: float) -> bool:
+    """Sub-threshold slump then stillness. Walking stays noisy in the tail."""
+    if peak < _SOFT_COLLAPSE_G:
+        return False
+    tail_cut = window[-1].timestamp_ms - _TAIL_STILL_MS
+    tail = [s for s in window if s.timestamp_ms >= tail_cut]
+    body = [s for s in window if s.timestamp_ms < tail_cut]
+    if not body or _ac_amplitude(tail) >= _AC_QUIET:
+        return False
+    moving = [s for s in body if abs(s.magnitude_g - 1.0) >= 0.3]
+    if len(moving) < 2:
+        return False
+    duration_s = (moving[-1].timestamp_ms - moving[0].timestamp_ms) / 1000.0
+    return duration_s >= _SOFT_COLLAPSE_MIN_S
+
+
 def accel_signature(
     window: Sequence[AccelSample],
     thresholds: ThresholdsConfig,
@@ -153,9 +191,7 @@ def accel_signature(
     impact = peak >= thresholds.impact_g_threshold
 
     if not impact:
-        if _ac_amplitude(window) < 0.15:
-            return AccelSignature.QUIET
-        if _peak_magnitude(window) >= 1.8:    # soft impact (~2g) without crossing threshold
+        if _is_soft_collapse(window, peak):
             return AccelSignature.SOFT_COLLAPSE
         return AccelSignature.QUIET
 

@@ -81,7 +81,16 @@ def test_aspect_ratio_handles_none() -> None:
 def test_centroid_velocity_downward_is_positive() -> None:
     vel = centroid_velocity((100.0, 200.0), (100.0, 350.0), dt_ms=500.0)
     assert vel is not None and vel > 0.0
-    assert vel == pytest.approx(300.0, rel=1e-3)
+    assert vel == pytest.approx(300.0, rel=1e-3)  # no height → pixels/s
+
+
+def test_centroid_velocity_normalizes_by_bbox_height() -> None:
+    # 150 px drop in 0.5 s with a 150 px-tall bbox → 2 body-lengths/s,
+    # same physical fall as 300 px/s on a 150 px person.
+    vel = centroid_velocity(
+        (100.0, 200.0), (100.0, 350.0), dt_ms=500.0, bbox_height_px=150.0,
+    )
+    assert vel == pytest.approx(2.0, rel=1e-3)
 
 
 def test_centroid_velocity_upward_is_negative() -> None:

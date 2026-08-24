@@ -2,7 +2,8 @@
  * KineticPulse wristband TCP client (ESP32-S3).
  *
  * Wire format must match kineticpulse/sensors/tcp.py — one NDJSON event
- * per line. Fake HR/accel until MAX30102 + IMU firmware lands.
+ * per line. Real MPU accel at 50 Hz; synthetic HR until MAX30102 lands
+ * in this firmware (the HUD env already drives the MAX30102).
  *
  * Setup:
  *   cp src/wifi_secrets.h.example src/wifi_secrets.h
@@ -11,19 +12,36 @@
  */
 #include <Arduino.h>
 #include <WiFi.h>
+#include <Wire.h>
 
 #include "wifi_secrets.h"
+#include "mpu6050.h"
 
 #ifndef DEVICE_ID
 #define DEVICE_ID "esp32-kp-001"
 #endif
 #ifndef FW_VERSION
-#define FW_VERSION "0.2.0"
+#define FW_VERSION "0.3.0"
 #endif
+
+#ifndef I2C_SDA
+#define I2C_SDA 5
+#endif
+#ifndef I2C_SCL
+#define I2C_SCL 6
+#endif
+
+// Fusion mock/engine assume ~50 Hz. 20 ms is enough to catch a 3 g spike
+// that lasts tens of milliseconds; 5 Hz (the old delay(200) loop) was not.
+static const uint32_t ACCEL_PERIOD_MS = 20;
+static const uint32_t HR_PERIOD_MS = 200;
 
 WiFiClient client;
 int bpm = 72;
 bool hello_sent = false;
+bool mpuOk = false;
+uint32_t lastAccelMs = 0;
+uint32_t lastHrMs = 0;
 
 void connectWiFi() {
   if (WiFi.status() == WL_CONNECTED) return;
@@ -64,14 +82,22 @@ void sendLine(const char *line) {
 }
 
 void sendHello() {
-  // caps: synthetic hr+accel until real PPG/IMU drivers land
   char buf[192];
-  snprintf(
-      buf,
-      sizeof(buf),
-      "{\"type\":\"hello\",\"device\":\"%s\",\"fw\":\"%s\",\"caps\":[\"hr\",\"accel\"]}",
-      DEVICE_ID,
-      FW_VERSION);
+  if (mpuOk) {
+    snprintf(
+        buf,
+        sizeof(buf),
+        "{\"type\":\"hello\",\"device\":\"%s\",\"fw\":\"%s\",\"caps\":[\"hr\",\"accel\"]}",
+        DEVICE_ID,
+        FW_VERSION);
+  } else {
+    snprintf(
+        buf,
+        sizeof(buf),
+        "{\"type\":\"hello\",\"device\":\"%s\",\"fw\":\"%s\",\"caps\":[\"hr\"]}",
+        DEVICE_ID,
+        FW_VERSION);
+  }
   sendLine(buf);
   hello_sent = true;
 }
@@ -103,6 +129,9 @@ void sendAccel(float ax, float ay, float az) {
 void setup() {
   Serial.begin(115200);
   delay(800);
+  Wire.begin(I2C_SDA, I2C_SCL);
+  mpuOk = mpuBegin();
+  Serial.printf("IMU %s who=0x%02X\n", mpuOk ? "ok" : "missing", mpuWho);
   connectWiFi();
 }
 
@@ -123,17 +152,22 @@ void loop() {
     sendHello();
   }
 
-  // Synthetic resting vitals — swap for MAX30102 / IMU reads later.
-  bpm += random(-1, 2);
-  if (bpm < 60) bpm = 60;
-  if (bpm > 90) bpm = 90;
+  uint32_t now = millis();
 
-  float ax = random(-30, 31) / 100.0f;
-  float ay = random(-30, 31) / 100.0f;
-  float az = 1.0f + random(-10, 11) / 100.0f;
+  if (mpuOk && (now - lastAccelMs) >= ACCEL_PERIOD_MS) {
+    lastAccelMs = now;
+    float ax, ay, az;
+    if (mpuAccelG(&ax, &ay, &az)) {
+      sendAccel(ax, ay, az);
+    }
+  }
 
-  sendHr(bpm);
-  sendAccel(ax, ay, az);
-
-  delay(200);  // ~5 Hz; Jetson idle timeout is 10s by default
+  if ((now - lastHrMs) >= HR_PERIOD_MS) {
+    lastHrMs = now;
+    // ponytail: synthetic BPM until this firmware owns MAX30102 (HUD env does).
+    bpm += random(-1, 2);
+    if (bpm < 60) bpm = 60;
+    if (bpm > 90) bpm = 90;
+    sendHr(bpm);
+  }
 }

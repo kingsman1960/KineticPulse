@@ -53,7 +53,7 @@ class FusionSnapshot:
     accel: AccelSignature
     hr: HrSignature
     latest_hr_bpm: Optional[int]
-    latest_accel_g: Optional[float]
+    latest_accel_g: Optional[float]   # peak |a| in the eval window, not the last sample
     detector_class: Optional[str]
     detector_conf: Optional[float]
     action_class: Optional[str] = None       # stable label if hysteresis settled, else raw argmax
@@ -72,7 +72,7 @@ class FusionEngine:
         sensor_events: "asyncio.Queue[SensorEvent]",
         snapshots: "asyncio.Queue[FusionSnapshot]",
         actions: "Optional[asyncio.Queue[ActionLogits]]" = None,
-        window_ms: int = 2000,
+        window_ms: int = 4000,
         evaluate_every_ms: int = 150,
     ) -> None:
         self.cfg = cfg
@@ -84,7 +84,9 @@ class FusionEngine:
         self.window_ms = window_ms
         self.evaluate_every_ms = evaluate_every_ms
 
-        self._accel: Deque[AccelSample] = collections.deque(maxlen=400)   # ~8 s at 50 Hz
+        # ~8 s at 100 Hz so a 4 s eval window still has headroom after the IMU
+        # firmware jumped from 5 Hz to 50–100 Hz.
+        self._accel: Deque[AccelSample] = collections.deque(maxlen=800)
         self._hr_events: Deque[SensorEvent] = collections.deque(maxlen=64)
         self._last_detection: Optional[Detection] = None
         self._last_features: Optional[PoseFeatures] = None
@@ -146,6 +148,7 @@ class FusionEngine:
             centroid_vel_pps=feat.centroid_vel_pps if feat else None,
             action_logits=action,
             action_confidence_threshold=action_threshold,
+            stillness=feat.stillness if feat else None,
         )
         accel_win = self._accel_window(ts)
         accel_sig = accel_signature(accel_win, self.cfg.thresholds)
@@ -154,7 +157,7 @@ class FusionEngine:
         hr_sig = hr_signature(hr_agg, self.cfg.thresholds)
 
         decision = classify(pose_sig, accel_sig, hr_sig)
-        latest_accel_g = accel_win[-1].magnitude_g if accel_win else None
+        latest_accel_g = max((s.magnitude_g for s in accel_win), default=None)
 
         if action is not None:
             published_label = action.stable_label or action.argmax_label

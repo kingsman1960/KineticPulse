@@ -182,6 +182,15 @@ async def _vision_worker(
 # --------------------------------------------------------------------------- #
 
 
+async def _cancel(task: asyncio.Task) -> None:
+    """Cancel a task and swallow whatever it raises on the way out."""
+    task.cancel()
+    try:
+        await task
+    except (asyncio.CancelledError, Exception):
+        pass
+
+
 async def _dispatch_worker(
     cfg: RuntimeConfig,
     snapshots_q: "asyncio.Queue[FusionSnapshot]",
@@ -228,6 +237,36 @@ async def _dispatch_worker(
             except Exception as exc:
                 log.warning("WebRTC startup failed (session=%s): %s", session_id, exc)
 
+        async def _escalate(snap: FusionSnapshot, voice_extra: Optional[dict] = None) -> None:
+            """Fire webhooks and open the live feed for one confirmed emergency."""
+            session_id = f"{cfg.webrtc.session_id_prefix}-{uuid.uuid4().hex[:12]}"
+            payload = build_payload(
+                cfg.alerts, snap, voice_extra=voice_extra, session_id=session_id
+            )
+            session_meta = build_session_meta(
+                session_id=session_id,
+                subject_id=cfg.alerts.subject_id,
+                location=cfg.alerts.location,
+                snapshot=snap,
+                extra={"voice_verdict": voice_extra["verdict"]} if voice_extra else None,
+            )
+            await asyncio.gather(
+                _dispatch_alert(payload),
+                _safe_webrtc_start(snap=snap, session_id=session_id, session_meta=session_meta),
+            )
+
+        async def _next_voice_bypass() -> FusionSnapshot:
+            """Wait for a tier that must not wait for a verbal reply.
+
+            Snapshots that do not qualify are discarded: by the time voice
+            verification finishes they are stale, and the cooldown below
+            would drop them anyway.
+            """
+            while True:
+                candidate = await snapshots_q.get()
+                if candidate.decision.tier.bypasses_voice:
+                    return candidate
+
         while not stop.is_set():
             try:
                 snap: FusionSnapshot = await asyncio.wait_for(snapshots_q.get(), timeout=1.0)
@@ -253,21 +292,16 @@ async def _dispatch_worker(
 
             if tier.bypasses_voice:
                 runtime_status.set_voice("not_required")
-                session_id = f"{cfg.webrtc.session_id_prefix}-{uuid.uuid4().hex[:12]}"
-                payload = build_payload(cfg.alerts, snap, session_id=session_id)
-                session_meta = build_session_meta(
-                    session_id=session_id,
-                    subject_id=cfg.alerts.subject_id,
-                    location=cfg.alerts.location,
-                    snapshot=snap,
-                )
-                await asyncio.gather(
-                    _dispatch_alert(payload),
-                    _safe_webrtc_start(snap=snap, session_id=session_id, session_meta=session_meta),
-                )
+                await _escalate(snap)
                 continue
 
             # Tier 1: voice verification.
+            if not cfg.voice.enabled:
+                log.info("Voice verification disabled; escalating Tier 1 unverified.")
+                runtime_status.set_voice("not_required")
+                await _escalate(snap)
+                continue
+
             runtime_status.set_voice("pending")
             runtime_status.push_event(
                 severity="info",
@@ -276,21 +310,59 @@ async def _dispatch_worker(
                 detail=cfg.voice.prompt_text,
                 timestamp_ms=snap.timestamp_ms,
             )
-            prompt_player.say(cfg.voice.prompt_text)
-            result = await stt.listen_once(duration_s=cfg.voice.verify_timeout_s)
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, prompt_player.say, cfg.voice.prompt_text)
+
+            # PRD: critical vitals during verification override the verbal
+            # reply. Race the transcript against the fusion queue rather than
+            # blocking on STT for the whole verify window.
+            listening = asyncio.create_task(
+                stt.listen_once(duration_s=cfg.voice.verify_timeout_s)
+            )
+            watching = asyncio.create_task(_next_voice_bypass())
+            done, _pending = await asyncio.wait(
+                {listening, watching}, return_when=asyncio.FIRST_COMPLETED
+            )
+
+            if watching in done:
+                critical = watching.result()
+                await _cancel(listening)
+                log.warning("Vitals critical during verification (%s); overriding voice.",
+                            critical.decision.reason)
+                runtime_status.set_voice("not_required")
+                runtime_status.push_event(
+                    severity="critical",
+                    category="voice",
+                    title="Voice verification overridden",
+                    detail=critical.decision.reason,
+                    timestamp_ms=critical.timestamp_ms,
+                )
+                last_tier_at_ms = critical.timestamp_ms
+                await _escalate(critical)
+                continue
+
+            await _cancel(watching)
+            try:
+                transcript = listening.result().text
+            except Exception as exc:
+                # A missing microphone must not take the alert path down with
+                # it; no transcript is treated the same as silence.
+                log.warning("STT unavailable (%s); treating as no response.", exc)
+                transcript = ""
+
             verdict, matched = classify_response(
-                text=result.text,
+                text=transcript,
                 safe_words=cfg.voice.safe_words,
                 distress_words=cfg.voice.distress_words,
             )
             log.info("STT: text=%r verdict=%s matched=%r",
-                     result.text, verdict.value, matched)
+                     transcript, verdict.value, matched)
             runtime_status.set_voice(verdict.value)
             runtime_status.push_event(
                 severity="info" if verdict == VoiceVerdict.SAFE else "warning",
                 category="voice",
                 title=f"Voice verdict: {verdict.value}",
-                detail=result.text or "(silence / no transcript)",
+                detail=transcript or "(silence / no transcript)",
                 timestamp_ms=snap.timestamp_ms,
             )
 
@@ -299,26 +371,11 @@ async def _dispatch_worker(
                 runtime_status.set_alert("idle")
                 continue
 
-            voice_extra = {
-                "transcript": result.text,
+            await _escalate(snap, voice_extra={
+                "transcript": transcript,
                 "verdict": verdict.value,
                 "matched_phrase": matched,
-            }
-            session_id = f"{cfg.webrtc.session_id_prefix}-{uuid.uuid4().hex[:12]}"
-            payload = build_payload(
-                cfg.alerts, snap, voice_extra=voice_extra, session_id=session_id
-            )
-            session_meta = build_session_meta(
-                session_id=session_id,
-                subject_id=cfg.alerts.subject_id,
-                location=cfg.alerts.location,
-                snapshot=snap,
-                extra={"voice_verdict": verdict.value},
-            )
-            await asyncio.gather(
-                _dispatch_alert(payload),
-                _safe_webrtc_start(snap=snap, session_id=session_id, session_meta=session_meta),
-            )
+            })
     finally:
         await dispatcher.aclose()
         await webrtc.stop()

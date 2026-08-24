@@ -108,7 +108,7 @@ class WristbandConfig:
     ppg_service_uuid: Optional[str] = None   # set when firmware lands; defaults to vendor UUID.
 
     # --- Capability flags (transport-agnostic) ------------------------------
-    has_accelerometer: bool = False   # IMU not yet ordered as of v0.1; True once installed.
+    has_accelerometer: bool = False   # True once MPU is on the TCP firmware.
     has_ppg_raw: bool = True          # ESP32 streams raw MAX30102 samples (vs. pre-computed BPM).
     ppg_sample_rate_hz: int = 100     # MAX30102 default sample rate.
 
@@ -132,15 +132,27 @@ class ThresholdsConfig:
 class VoiceConfig:
     enabled: bool = True
     verify_timeout_s: float = 10.0
-    prompt_text: str = "A fall has been detected. Are you okay?"
+    prompt_text: str = (
+        "A fall has been detected. Are you okay? "
+        "Ein Sturz wurde erkannt. Geht es Ihnen gut?"
+    )
     distress_words: List[str] = field(
-        default_factory=lambda: ["help", "emergency", "save me", "hurt", "pain"]
+        default_factory=lambda: [
+            "help", "emergency", "save me", "hurt", "hurts", "pain",
+            "hilfe", "notfall", "rettet mich", "weh", "schmerzen", "aua",
+        ]
     )
     safe_words: List[str] = field(
-        default_factory=lambda: ["i am fine", "i'm fine", "im fine", "okay", "ok", "all good"]
+        default_factory=lambda: [
+            "i am fine", "i'm fine", "im fine", "okay", "ok", "all good",
+            "mir geht es gut", "mir gehts gut", "mir geht's gut",
+            "ich bin okay", "ich bin ok",
+            "alles gut", "alles in ordnung",
+        ]
     )
-    stt_model: str = "small.en"        # CTranslate2 / faster-whisper model name
+    stt_model: str = "small"           # multilingual; *.en cannot transcribe German
     stt_device: str = "auto"
+    stt_languages: List[str] = field(default_factory=lambda: ["en", "de"])
 
 
 @dataclass
