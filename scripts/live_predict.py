@@ -259,12 +259,19 @@ def probe_cameras(max_index: int = 4) -> List[Tuple[int, str]]:
 
 
 def open_camera(cv2, index: int, prefer_backend: Optional[str] = None,
-                retries: int = 5, retry_delay_s: float = 0.4):
+                retries: int = 5, retry_delay_s: float = 0.4,
+                width: Optional[int] = None, height: Optional[int] = None):
     """Open camera ``index`` with the most reliable available backend.
 
     On Windows, releasing a capture from ``probe_cameras`` and immediately
     re-opening the same index sometimes races and ``VideoCapture.isOpened()``
     returns False. A few short retries make this rock-solid in practice.
+
+    ``width``/``height`` request a capture size. This matters for more than
+    image quality: the fusion rules need the hip and shoulder keypoints to
+    compute a torso angle, and at 640x480 a subject near the lens loses the
+    hips entirely, which silently disables the whole fall-detection path.
+    UVC webcams usually only reach 720p+ on MJPG, so set the FOURCC first.
     """
     backends = (prefer_backend,) if prefer_backend else _backends_to_try()
     last_err = None
@@ -272,6 +279,14 @@ def open_camera(cv2, index: int, prefer_backend: Optional[str] = None,
         for be in backends:
             cap = cv2.VideoCapture(index, _backend_const(cv2, be))
             if cap.isOpened():
+                if width and height:
+                    try:
+                        cap.set(cv2.CAP_PROP_FOURCC,
+                                cv2.VideoWriter_fourcc(*"MJPG"))
+                    except Exception:
+                        pass          # not fatal; YUYV just caps the size
+                    cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+                    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
                 # Some webcams need a couple of warm-up reads.
                 ret = False
                 for _ in range(5):
@@ -280,8 +295,13 @@ def open_camera(cv2, index: int, prefer_backend: Optional[str] = None,
                         break
                     time.sleep(0.05)
                 if ret:
+                    got_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                    got_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
                     print(f"[camera] index={index} backend={be} OK "
-                          f"(attempt {attempt})")
+                          f"(attempt {attempt}) {got_w}x{got_h}")
+                    if width and height and (got_w, got_h) != (width, height):
+                        print(f"[camera] WARNING: requested {width}x{height} "
+                              f"but the device negotiated {got_w}x{got_h}")
                     return cap
                 cap.release()
                 last_err = f"{be}: opened but read() returned False"
@@ -310,6 +330,13 @@ def parse_args() -> argparse.Namespace:
                    help="Force a specific OpenCV backend (Windows: DSHOW recommended).")
     p.add_argument("--probe", action="store_true",
                    help="Only probe camera indices 0..4 and exit.")
+    p.add_argument("--cap-width", type=int, default=1280,
+                   help="Requested capture width. 1280x720 keeps the hips in "
+                        "frame at a normal standing distance; the fusion rules "
+                        "need hip+shoulder keypoints for a torso angle, and "
+                        "without it the fall path degrades to 'stand'.")
+    p.add_argument("--cap-height", type=int, default=720,
+                   help="Requested capture height (see --cap-width).")
     p.add_argument("--imgsz", type=int, default=640)
     p.add_argument("--conf", type=float, default=0.5)
     p.add_argument("--iou", type=float, default=0.45)
@@ -387,9 +414,20 @@ def main() -> int:
         raise SystemExit(2) from exc
 
     print(f"OpenCV : {cv2.__version__}")
-    print(f"Probing cameras 0..{args.max_cameras} ...")
-    available = probe_cameras(max_index=args.max_cameras)
-    if not available:
+
+    # Probing is a diagnostic convenience, not a prerequisite. Skip it when the
+    # caller already named an index: on Linux a UVC webcam exposes a second
+    # /dev/videoN metadata node for the *same* physical device, and probing
+    # that sibling node mid-session makes the driver spit
+    # "ioctl(VIDIOC_QBUF): Bad file descriptor" and can leave the real node
+    # unusable. --probe still forces the scan explicitly.
+    if args.camera is not None and not args.probe:
+        print(f"Camera index {args.camera} given; skipping probe.")
+        available = []
+    else:
+        print(f"Probing cameras 0..{args.max_cameras} ...")
+        available = probe_cameras(max_index=args.max_cameras)
+    if not available and args.camera is None:
         print("[error] No working camera detected.")
         print("Likely causes:")
         print("  - Another app (Zoom, Teams, OBS, browser) is holding the camera.")
@@ -397,9 +435,10 @@ def main() -> int:
         print("  - Anti-virus / endpoint manager is blocking webcam access for python.exe.")
         return 1
 
-    print("Available cameras:")
-    for idx, be in available:
-        print(f"  - index={idx} (via {be})")
+    if available:
+        print("Available cameras:")
+        for idx, be in available:
+            print(f"  - index={idx} (via {be})")
 
     if args.probe:
         return 0
@@ -497,7 +536,8 @@ def main() -> int:
         priority_cfg = None
         rule_counter = Counter()
 
-    cap = open_camera(cv2, chosen, prefer_backend=args.backend)
+    cap = open_camera(cv2, chosen, prefer_backend=args.backend,
+                      width=args.cap_width, height=args.cap_height)
 
     win = "KineticPulse - live spot-check (press q or ESC to quit)"
     cv2.namedWindow(win, cv2.WINDOW_NORMAL)

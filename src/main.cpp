@@ -2,8 +2,8 @@
  * KineticPulse wristband TCP client (ESP32-S3).
  *
  * Wire format must match kineticpulse/sensors/tcp.py — one NDJSON event
- * per line. Real MPU accel at 50 Hz; synthetic HR until MAX30102 lands
- * in this firmware (the HUD env already drives the MAX30102).
+ * per line. Real MPU accel at 50 Hz and real MAX30102/30105 HR (the beat
+ * detector is the same one the sensor_display HUD env uses).
  *
  * Setup:
  *   cp src/wifi_secrets.h.example src/wifi_secrets.h
@@ -13,6 +13,9 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <Wire.h>
+
+#include "MAX30105.h"
+#include "heartRate.h"
 
 #include "wifi_secrets.h"
 #include "mpu6050.h"
@@ -36,8 +39,53 @@
 static const uint32_t ACCEL_PERIOD_MS = 20;
 static const uint32_t HR_PERIOD_MS = 200;
 
+// MAX30105 beat detection. getIR() must be polled at roughly the 100 Hz
+// sample rate configured in setup(), so it runs every loop() pass rather
+// than on the HR_PERIOD_MS send cadence.
+MAX30105 ppg;
+static const byte RATE_SIZE = 4;
+static byte rates[RATE_SIZE];
+static byte rateSpot = 0;
+static long lastBeat = 0;
+static float beatsPerMinute = 0;
+static int beatAvg = 0;
+static bool ppgOk = false;
+// Below this IR level nothing is on the sensor; report "no reading" rather
+// than a stale BPM, so fusion sees an absent HR instead of a wrong one.
+static const long IR_PRESENT_MIN = 50000;
+
+static void pollHeartRate() {
+  if (!ppgOk) return;
+  long ir = ppg.getIR();
+  if (checkForBeat(ir)) {
+    long delta = millis() - lastBeat;
+    lastBeat = millis();
+    if (delta > 0) {
+      beatsPerMinute = 60.0f / (delta / 1000.0f);
+      if (beatsPerMinute > 20 && beatsPerMinute < 255) {
+        rates[rateSpot++] = (byte)beatsPerMinute;
+        rateSpot %= RATE_SIZE;
+        int sum = 0;
+        byte filled = 0;
+        for (byte i = 0; i < RATE_SIZE; i++) {
+          if (rates[i] != 0) {
+            sum += rates[i];
+            filled++;
+          }
+        }
+        if (filled) beatAvg = sum / filled;
+      }
+    }
+  }
+  if (ir < IR_PRESENT_MIN) {
+    beatAvg = 0;
+    beatsPerMinute = 0;
+    memset(rates, 0, sizeof(rates));
+    rateSpot = 0;
+  }
+}
+
 WiFiClient client;
-int bpm = 72;
 bool hello_sent = false;
 bool mpuOk = false;
 uint32_t lastAccelMs = 0;
@@ -83,21 +131,21 @@ void sendLine(const char *line) {
 
 void sendHello() {
   char buf[192];
+  // Advertise only what actually came up on the I2C bus this boot, so the
+  // Jetson can tell a missing sensor from a silent one.
+  char caps[48] = "";
+  if (ppgOk) strncat(caps, "\"hr\"", sizeof(caps) - strlen(caps) - 1);
   if (mpuOk) {
-    snprintf(
-        buf,
-        sizeof(buf),
-        "{\"type\":\"hello\",\"device\":\"%s\",\"fw\":\"%s\",\"caps\":[\"hr\",\"accel\"]}",
-        DEVICE_ID,
-        FW_VERSION);
-  } else {
-    snprintf(
-        buf,
-        sizeof(buf),
-        "{\"type\":\"hello\",\"device\":\"%s\",\"fw\":\"%s\",\"caps\":[\"hr\"]}",
-        DEVICE_ID,
-        FW_VERSION);
+    if (caps[0]) strncat(caps, ",", sizeof(caps) - strlen(caps) - 1);
+    strncat(caps, "\"accel\"", sizeof(caps) - strlen(caps) - 1);
   }
+  snprintf(
+      buf,
+      sizeof(buf),
+      "{\"type\":\"hello\",\"device\":\"%s\",\"fw\":\"%s\",\"caps\":[%s]}",
+      DEVICE_ID,
+      FW_VERSION,
+      caps);
   sendLine(buf);
   hello_sent = true;
 }
@@ -131,7 +179,20 @@ void setup() {
   delay(800);
   Wire.begin(I2C_SDA, I2C_SCL);
   mpuOk = mpuBegin();
-  Serial.printf("IMU %s who=0x%02X\n", mpuOk ? "ok" : "missing", mpuWho);
+
+  ppgOk = ppg.begin(Wire, I2C_SPEED_FAST, 0x57);
+  if (ppgOk) {
+    // ledBright, sampleAvg, mode(2=Red+IR), rateHz, pulseWidth, adcRange
+    // — same configuration the sensor_display HUD env validated.
+    ppg.setup(0x2F, 4, 2, 100, 411, 4096);
+    ppg.setPulseAmplitudeIR(0x3F);
+    ppg.setPulseAmplitudeRed(0x1F);
+    ppg.setPulseAmplitudeGreen(0);
+  }
+
+  Serial.printf("IMU %s who=0x%02X | PPG %s\n",
+                mpuOk ? "ok" : "missing", mpuWho,
+                ppgOk ? "ok" : "missing");
   connectWiFi();
 }
 
@@ -162,12 +223,16 @@ void loop() {
     }
   }
 
+  // Must run every pass: checkForBeat() needs the full ~100 Hz IR stream.
+  pollHeartRate();
+
   if ((now - lastHrMs) >= HR_PERIOD_MS) {
     lastHrMs = now;
-    // ponytail: synthetic BPM until this firmware owns MAX30102 (HUD env does).
-    bpm += random(-1, 2);
-    if (bpm < 60) bpm = 60;
-    if (bpm > 90) bpm = 90;
-    sendHr(bpm);
+    // Only publish a settled average. Skipping the send while the finger is
+    // off the sensor lets the Jetson's pulse_loss_timeout_s do its job
+    // instead of being fed a fabricated resting BPM.
+    if (beatAvg > 0) {
+      sendHr(beatAvg);
+    }
   }
 }

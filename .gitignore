@@ -124,3 +124,6 @@ secrets/
 src/wifi_secrets.h
 *.pem
 *.key
+
+# Local diagnostic captures / runtime logs
+logs/

@@ -353,3 +353,121 @@ def test_no_accel_cardiac_path_still_bypasses_voice() -> None:
     decision = classify(pose, accel, hr)
     assert decision.tier == EmergencyTier.TIER_2_CARDIAC
     assert decision.tier.bypasses_voice
+
+
+# --------------------------------------------------------------------------- #
+# Partial framing: torso_angle_deg is None (hips/shoulders out of frame)
+# --------------------------------------------------------------------------- #
+
+
+def test_stand_with_no_torso_angle_still_detects_descent() -> None:
+    """Subject collapses while only the upper body is framed, so the pose
+    estimator cannot resolve hips and torso_angle_deg is None. The angle-gated
+    rules all degrade to UPRIGHT, so bbox kinematics must carry the call."""
+    pose = pose_signature(
+        detector_class="stand",
+        torso_angle_deg=None,
+        aspect_ratio=0.8,
+        centroid_vel_pps=1.4,
+        stillness=0.1,
+    )
+    assert pose == PoseSignature.FALLING
+
+
+def test_sitting_collapse_with_no_torso_angle_is_detected() -> None:
+    """The reported failure mode: subject slumps out of a chair while framed
+    close to the lens. Detector says 'sitting', no torso angle available."""
+    pose = pose_signature(
+        detector_class="sitting",
+        torso_angle_deg=None,
+        aspect_ratio=0.9,
+        centroid_vel_pps=1.1,
+        stillness=0.15,
+    )
+    assert pose == PoseSignature.FALLING
+
+
+def test_no_torso_angle_wide_bbox_lowers_the_descent_bar() -> None:
+    """A bbox already wider than tall needs less measured drop to be credible."""
+    slow_descent = 0.7
+    assert pose_signature(
+        detector_class="stand", torso_angle_deg=None,
+        aspect_ratio=1.4, centroid_vel_pps=slow_descent, stillness=0.1,
+    ) == PoseSignature.FALLING
+    # Same descent with an upright-shaped bbox stays below the bar.
+    assert pose_signature(
+        detector_class="stand", torso_angle_deg=None,
+        aspect_ratio=0.7, centroid_vel_pps=slow_descent, stillness=0.1,
+    ) == PoseSignature.UPRIGHT
+
+
+def test_no_torso_angle_still_subject_is_not_promoted() -> None:
+    """Fallback must not fire on a still subject - that is bbox jitter, and a
+    false tier_1 wakes the resident with a voice prompt for nothing."""
+    pose = pose_signature(
+        detector_class="stand",
+        torso_angle_deg=None,
+        aspect_ratio=0.8,
+        centroid_vel_pps=1.4,
+        stillness=0.95,
+    )
+    assert pose == PoseSignature.UPRIGHT
+
+
+def test_no_torso_angle_without_velocity_is_not_promoted() -> None:
+    """No measured descent means no fall claim, however wide the bbox is."""
+    pose = pose_signature(
+        detector_class="stand",
+        torso_angle_deg=None,
+        aspect_ratio=1.6,
+        centroid_vel_pps=None,
+        stillness=0.1,
+    )
+    assert pose == PoseSignature.UPRIGHT
+
+
+def test_no_angle_fallback_cannot_reach_the_seizure_tier() -> None:
+    """The fallback yields FALLING, never PRONE, so it cannot satisfy the
+    Scenario B seizure rule (which requires PRONE + IMPACT_TREMOR).
+
+    FALLING on its own is not voice-safe - with bradycardia or pulse loss it
+    still escalates to tier_2_cardiac and bypasses voice. That is intended:
+    those HR states are independent evidence, not a vision artefact.
+    """
+    pose = pose_signature(
+        detector_class="stand", torso_angle_deg=None,
+        aspect_ratio=1.5, centroid_vel_pps=2.0, stillness=0.1,
+    )
+    assert pose == PoseSignature.FALLING
+
+    # Stable/absent vitals: the fallback alone only ever asks for verification.
+    for hr in (HrSignature.RESTING, HrSignature.UNKNOWN):
+        decision = classify(pose, AccelSignature.UNKNOWN, hr)
+        assert decision.tier == EmergencyTier.TIER_1_VERIFY
+        assert not decision.tier.bypasses_voice
+
+    # Yielding FALLING rather than PRONE keeps the PRONE-gated seizure rule
+    # out of reach: the same accel/HR pair escalates to a voice-bypassing
+    # seizure tier under PRONE, but only to tier_1_verify under FALLING.
+    # (The other seizure rule ignores pose entirely, so the fallback cannot
+    # influence it in either direction.)
+    as_falling = classify(pose, AccelSignature.IMPACT_TREMOR, HrSignature.PANIC_SPIKE)
+    assert as_falling.tier == EmergencyTier.TIER_1_VERIFY
+    assert not as_falling.tier.bypasses_voice
+    as_prone = classify(
+        PoseSignature.PRONE, AccelSignature.IMPACT_TREMOR, HrSignature.PANIC_SPIKE
+    )
+    assert as_prone.scenario == "B"
+
+
+def test_angle_present_keeps_tuned_rules_authoritative() -> None:
+    """When the estimator does give an angle, the fallback must stay out of
+    the way - a small torso angle still means upright even at high velocity."""
+    pose = pose_signature(
+        detector_class="stand",
+        torso_angle_deg=15.0,
+        aspect_ratio=0.6,
+        centroid_vel_pps=3.0,
+        stillness=0.1,
+    )
+    assert pose == PoseSignature.UPRIGHT

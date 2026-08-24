@@ -17,7 +17,17 @@ detector:
   # 4-class checkpoint (fallen / falling / stand / sitting). Use the .onnx
   # or the TensorRT .engine on the Jetson once you've converted them.
   weights: runs/detect/kp_v2_4cls/weights/best.pt
-  conf: 0.5
+  # Measured on the 111-image held-out val split in archive.zip (70 fall /
+  # 41 not-fallen) with this checkpoint, counting fallen|falling as a fall:
+  #   conf 0.50 -> 80% fall recall,  7% false-alarm rate   <- previous value
+  #   conf 0.40 -> 93% fall recall, 10%
+  #   conf 0.25 -> 96% fall recall, 17%                    <- chosen
+  #   conf 0.20 -> 99% fall recall, 20%
+  # 0.50 missed 13 of 70 real falls outright. A missed fall leaves someone on
+  # the floor; a false alarm only costs an "are you okay?" voice prompt, and
+  # temporal.hysteresis_min_consecutive=3 already discards transient per-frame
+  # flips. Recall is therefore weighted well above precision here.
+  conf: 0.25
   iou: 0.45
   imgsz: 640
   device: auto             # auto | cpu | 0 | 0,1

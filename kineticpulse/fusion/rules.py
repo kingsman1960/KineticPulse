@@ -21,6 +21,19 @@ from kineticpulse.temporal.types import ActionLogits
 # full-height drop in one second. Upgrade: per-camera calibration.
 _FALL_VEL_BLS = 1.0
 _SIT_COLLAPSE_VEL_BLS = 0.85
+# Kinematic-only fallback: torso_angle_deg is None whenever the pose estimator
+# cannot resolve all four shoulder/hip landmarks (subject too close to the
+# lens, partially framed, or occluded). Every angle-gated rule below then
+# degrades silently to UPRIGHT, so a real collapse in that framing was
+# unreportable. bbox kinematics survive partial framing, so they carry the
+# decision instead. Deliberately only ever yields FALLING - never PRONE - so
+# the fallback stays clear of the PRONE-gated seizure rule in tiers.py. Note
+# FALLING is NOT voice-safe on its own: paired with bradycardia or pulse loss
+# it still escalates to tier_2_cardiac and bypasses voice. That is intended -
+# those HR states are independent evidence, not a vision artefact.
+_FALL_VEL_NO_ANGLE_BLS = 0.9
+# A bbox already wider than tall needs less measured drop to be credible.
+_NO_ANGLE_HORIZONTAL_RELIEF = 0.7
 _STILLNESS_HIGH = 0.7   # 1/(1+std); still window in tests is > 0.9
 _STILLNESS_LOW = 0.3    # moving window in tests is < 0.2
 _SOFT_COLLAPSE_G = 1.8
@@ -43,6 +56,29 @@ class PoseSignature(str, Enum):
     FALLING = "falling"            # mid-fall transition
     PRONE = "prone"                # subject is on the ground
     FALSE_POSITIVE = "false_pos"   # CV anomaly that the pose features overrule
+
+
+def _no_angle_descent(
+    torso_angle_deg: Optional[float],
+    centroid_vel_pps: Optional[float],
+    horizontal: bool,
+    still: bool,
+) -> bool:
+    """True when bbox kinematics alone justify a FALLING signature.
+
+    Only consulted when ``torso_angle_deg`` is None -- if the estimator gave
+    us an angle, the tuned angle-gated rules stay authoritative. Requires a
+    measured downward centroid velocity, so a merely wide or jittering bbox
+    cannot trigger it on its own.
+    """
+    if torso_angle_deg is not None:
+        return False
+    if centroid_vel_pps is None or still:
+        return False
+    bar = _FALL_VEL_NO_ANGLE_BLS
+    if horizontal:
+        bar *= _NO_ANGLE_HORIZONTAL_RELIEF
+    return centroid_vel_pps > bar
 
 
 def pose_signature(
@@ -92,6 +128,10 @@ def pose_signature(
     fidgeting = stillness is not None and stillness < _STILLNESS_LOW
 
     cls = (effective_class or "").lower()
+    horizontal = aspect_ratio is not None and aspect_ratio > 1.0
+    no_angle_fall = _no_angle_descent(
+        torso_angle_deg, centroid_vel_pps, horizontal, still
+    )
     if cls == "fallen":
         if (torso_angle_deg is not None and torso_angle_deg < 30
                 and (aspect_ratio is None or aspect_ratio < 1.0)):
@@ -111,6 +151,8 @@ def pose_signature(
         if (torso_angle_deg is not None and torso_angle_deg > 70
                 and aspect_ratio is not None and aspect_ratio > 1.0):
             return PoseSignature.PRONE
+        if no_angle_fall:
+            return PoseSignature.FALLING
         return PoseSignature.UPRIGHT
     if cls == "sitting":
         # Sudden seated drop with marked tilt - possible syncope.
@@ -118,6 +160,8 @@ def pose_signature(
         if (centroid_vel_pps is not None and centroid_vel_pps > _SIT_COLLAPSE_VEL_BLS
                 and torso_angle_deg is not None and torso_angle_deg > 50
                 and not still):
+            return PoseSignature.FALLING
+        if no_angle_fall:
             return PoseSignature.FALLING
         # Otherwise sitting is just a non-fall posture; fusion treats it the
         # same as standing for Scenario D dismissal but the engine still
