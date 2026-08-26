@@ -405,35 +405,6 @@ select {
   line-height: 1.4;
 }
 
-.scenario-control {
-  margin-top: 14px;
-  padding: 14px 16px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 14px;
-}
-
-.scenario-label {
-  color: #4b5563;
-  font-size: 0.76rem;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.scenario-control select {
-  max-width: 190px;
-  padding: 9px 34px 9px 13px;
-  border: 0;
-  border-radius: 999px;
-  outline: 1px solid #d1d5db;
-  background: rgba(243, 244, 246, 0.88);
-  color: #202a36;
-  font-size: 0.8rem;
-  cursor: pointer;
-}
-
 .state-card {
   min-height: 360px;
   padding: 42px;
@@ -523,15 +494,6 @@ select {
     min-height: 132px;
   }
 
-  .scenario-control {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-
-  .scenario-control select {
-    width: 100%;
-    max-width: none;
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1530,28 +1492,6 @@ select {
 .empty-events p {
   margin: 0;
   font-size: 0.75rem;
-}
-
-.scenario-control.redesigned {
-  margin: 0;
-  padding: 14px;
-}
-
-.scenario-control.redesigned > div {
-  display: grid;
-  gap: 5px;
-}
-
-.dev-badge {
-  width: fit-content;
-  padding: 3px 6px;
-  border-radius: 6px;
-  background: rgba(124, 58, 237, 0.09);
-  color: #7c3aed;
-  font-size: 0.55rem;
-  font-weight: 700;
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
 }
 
 @media (max-width: 1120px) {

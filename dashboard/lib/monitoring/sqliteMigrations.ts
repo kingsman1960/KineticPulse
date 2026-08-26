@@ -41,5 +41,42 @@ export const SQLITE_MIGRATIONS: readonly SQLiteMigration[] = [
       `CREATE UNIQUE INDEX IF NOT EXISTS idx_monitoring_events_source_event
        ON monitoring_events(source, source_event_id)`
     ]
+  },
+  {
+    version: 2,
+    description: "Remove legacy mock monitoring history and restrict events to Jetson data",
+    statements: [
+      "ALTER TABLE monitoring_events RENAME TO monitoring_events_v1",
+      `CREATE TABLE monitoring_events (
+        id TEXT PRIMARY KEY,
+        source_event_id TEXT NOT NULL CHECK (length(trim(source_event_id)) > 0),
+        source TEXT NOT NULL CHECK (source = 'jetson'),
+        event_timestamp_utc TEXT NOT NULL,
+        event_type TEXT NOT NULL,
+        scenario_type TEXT NOT NULL,
+        severity TEXT NOT NULL,
+        title TEXT NOT NULL,
+        detail TEXT NOT NULL,
+        system_status TEXT NOT NULL,
+        device_connection_status TEXT NOT NULL,
+        heart_rate_bpm INTEGER,
+        imu_state TEXT NOT NULL,
+        vision_state TEXT NOT NULL,
+        fall_confidence REAL,
+        fall_detected INTEGER NOT NULL CHECK (fall_detected IN (0, 1)),
+        emergency_tier TEXT NOT NULL,
+        voice_verification_status TEXT NOT NULL,
+        alert_dispatch_status TEXT NOT NULL,
+        normalized_payload_json TEXT,
+        created_at_utc TEXT NOT NULL
+      )`,
+      `INSERT INTO monitoring_events
+       SELECT * FROM monitoring_events_v1 WHERE source = 'jetson'`,
+      "DROP TABLE monitoring_events_v1",
+      `CREATE INDEX idx_monitoring_events_timestamp_utc
+       ON monitoring_events(event_timestamp_utc DESC)`,
+      `CREATE UNIQUE INDEX idx_monitoring_events_source_event
+       ON monitoring_events(source, source_event_id)`
+    ]
   }
 ];

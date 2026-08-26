@@ -6,7 +6,7 @@
 This folder contains:
 
 - Next.js monitoring and caregiver web UI (`app/`)
-- Mock-first monitoring API (`app/api/monitoring/route.ts`)
+- Real Jetson monitoring API proxy (`app/api/monitoring/route.ts`)
 - Normalized monitoring model and adapters (`lib/monitoring/`)
 - SQLite operational event persistence
 - WebSocket signaling server (`server/signaling-server.js`)
@@ -14,16 +14,16 @@ This folder contains:
 
 ## Run the monitoring dashboard
 
-The MVP defaults to mock mode and does not require the Python runtime or hardware.
-The environment example is located at `dashboard/.env.example`. From the repository
+The dashboard requires the Python runtime's real `GET /monitoring` publisher. The
+environment example is located at `dashboard/.env.example`. From the repository
 root, create the local file with placeholder development values using:
 
 ```powershell
 Copy-Item dashboard/.env.example dashboard/.env.local
 ```
 
-Edit `dashboard/.env.local` only when you need to change the SQLite path, retention,
-recent-event limit, monitoring source, or signaling endpoints. Do not commit secrets.
+Edit `dashboard/.env.local` only when you need to change the Jetson URL, SQLite path,
+retention, recent-event limit, or signaling endpoints. Do not commit secrets.
 
 SQLite is used because this is currently a single-device prototype with modest
 operational event volume. It provides durable local history without introducing an
@@ -47,40 +47,14 @@ npm test
 npm run build
 ```
 
-## Mock mode
-
-Mock mode is selected when `MONITORING_DATA_MODE` is absent or set to `mock`.
-A development-only selector provides these scenarios:
-
-- `normal`
-- `resting`
-- `possible_fall`
-- `confirmed_fall`
-- `pulse_lost`
-- `sensor_disconnected`
-
-Every mock object is located in
-[`lib/monitoring/mockMonitoringData.ts`](lib/monitoring/mockMonitoringData.ts).
-That file documents simulated meaning, expected hardware/pipeline source, units,
-ranges, null/error meaning, and the exact future mapping point for important fields.
-Mock values are never embedded in UI components or stored as scenario definitions in
-SQLite.
-
-The scenario selector is hidden in production. It can be explicitly enabled with:
-
-```bash
-NEXT_PUBLIC_ENABLE_SCENARIO_SELECTOR=true
-```
-
 ## Data-source architecture
 
 Dashboard components consume only `MonitoringModel` from
-[`lib/monitoring/model.ts`](lib/monitoring/model.ts). They do not know whether data
-came from a mock, HTTP endpoint, ESP32, future WebSocket, in-memory store, or SQLite.
+[`lib/monitoring/model.ts`](lib/monitoring/model.ts). They do not depend directly on
+the Jetson wire format, HTTP transport, ESP32 transport, or SQLite persistence.
 
-- `mockMonitoringAdapter.ts` maps the centralized mock scenarios.
-- `backendMonitoringAdapter.ts` maps the future real monitoring envelope.
-- `dataSources.ts` selects mock or real mode and labels event sources.
+- `backendMonitoringAdapter.ts` maps the real monitoring envelope.
+- `dataSources.ts` connects to the configured Jetson monitoring publisher.
 - `clientDataSource.ts` is the small browser polling boundary and can later be
   replaced by a WebSocket client without rewriting UI components.
 - `EventStore` is the persistence boundary implemented by `SQLiteEventStore` and
@@ -95,12 +69,12 @@ On the Jetson, `kineticpulse` publishes vitals at `GET /monitoring` (default
 port **8790**, `config.yaml` → `monitoring:`). Point the dashboard at it:
 
 ```bash
-MONITORING_DATA_MODE=real
 KINETICPULSE_MONITORING_HTTP_URL=http://<jetson-host>:8790/monitoring
 ```
 
 `./bootstrap.sh` writes these into `deploy/handoff/caregiver.env` and
-`dashboard/.env.local` automatically. Keep `mock` mode for UI work without hardware.
+`dashboard/.env.local` automatically. If the runtime or hardware is unavailable, the
+dashboard shows explicit unavailable/disconnected states rather than simulated values.
 
 ## Expected monitoring contract
 
@@ -173,7 +147,7 @@ process working directory. The runtime directory and SQLite `.db`, `.db-wal`, an
 `monitoring_events` with:
 
 - stable record and source event IDs;
-- `source` (`mock`, `jetson`, or `unknown`);
+- `source` (`jetson` only);
 - UTC ISO-8601 event and creation timestamps;
 - event category, scenario, severity, title, and detail;
 - system/device connection status, heart rate, IMU/vision state, fall confidence and
@@ -188,9 +162,8 @@ where supported.
 
 The primary record ID is deterministic: `<source>:<source_event_id>`. A unique
 `(source, source_event_id)` index provides a second database-level guard. Repeated
-three-second polling therefore does not insert duplicate mock or Jetson events. Mock
-scenario definitions themselves remain only in `mockMonitoringData.ts`; only their
-emitted normalized events are persisted with `source=mock`.
+three-second polling therefore does not insert duplicate Jetson events. Migration 2
+removes legacy simulated history and restricts new rows to `source=jetson`.
 
 ### Inspect or reset locally
 
@@ -205,9 +178,9 @@ To reset local history, stop the dashboard and remove `runtime/monitoring.db` pl
 matching `-wal` and `-shm` files. The schema is recreated automatically on next start.
 This reset is destructive and cannot be recovered unless the database was backed up.
 
-### Future Jetson writes
+### Jetson writes
 
-The future Jetson endpoint continues through `BackendMonitoringDataSource` and
+The Jetson endpoint flows through `BackendMonitoringDataSource` and
 `backendMonitoringAdapter.ts`. That adapter produces the same normalized model, while
 the API labels emitted records `source=jetson` and writes through the same `EventStore`
 interface. No UI or public response-contract change is needed.

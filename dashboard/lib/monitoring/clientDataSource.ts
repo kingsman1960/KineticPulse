@@ -1,12 +1,10 @@
-import type { MonitoringModel, MonitoringScenario } from "./model";
+import type { MonitoringModel } from "./model";
 
 /** Browser polling boundary; replace its implementation with WebSocket later. */
 export async function fetchMonitoringSnapshot(
-  scenario: MonitoringScenario,
   signal?: AbortSignal
 ): Promise<MonitoringModel> {
-  const query = new URLSearchParams({ scenario });
-  const response = await fetch(`/api/monitoring?${query}`, {
+  const response = await fetch("/api/monitoring", {
     cache: "no-store",
     signal,
     headers: { Accept: "application/json" }

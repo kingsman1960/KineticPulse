@@ -6,10 +6,9 @@ Updated by the dispatch worker; read by ``MonitoringPublisher``.
 from __future__ import annotations
 
 import collections
+import time
 from dataclasses import dataclass, field
 from typing import Deque, Dict, List, Optional
-
-from kineticpulse.utils.timing import now_ms
 
 
 @dataclass
@@ -35,10 +34,14 @@ class CaregiverRuntimeStatus:
         timestamp_ms: Optional[int] = None,
     ) -> None:
         self._event_seq += 1
+        # Runtime callers pass fusion's monotonic timestamps. Those are valid
+        # for internal ordering but not for dashboard dates or SQLite history.
+        if timestamp_ms is None or timestamp_ms < 1_000_000_000_000:
+            timestamp_ms = int(time.time() * 1000)
         self._events.append(
             {
                 "id": f"runtime-{self._event_seq}",
-                "timestamp_ms": timestamp_ms if timestamp_ms is not None else now_ms(),
+                "timestamp_ms": timestamp_ms,
                 "severity": severity,
                 "category": category,
                 "title": title,

@@ -1,8 +1,19 @@
 import { NextRequest } from "next/server";
 import { describe, expect, it } from "vitest";
-import { MockMonitoringDataSource } from "../lib/monitoring/dataSources";
+import { mapBackendMonitoringPayload } from "../lib/monitoring/backendMonitoringAdapter";
+import type { MonitoringDataSource } from "../lib/monitoring/dataSources";
 import type { MonitoringRepository } from "../lib/monitoring/eventStore";
 import { handleMonitoringRequest } from "../lib/monitoring/monitoringApiHandler";
+import { normalMonitoringPayload } from "./monitoringFixture";
+
+function realDataSource(): MonitoringDataSource {
+  return {
+    source: "jetson",
+    async read() {
+      return mapBackendMonitoringPayload(normalMonitoringPayload());
+    }
+  };
+}
 
 describe("monitoring API persistence failures", () => {
   it("returns HTTP 503 instead of crashing when SQLite is unavailable", async () => {
@@ -14,10 +25,10 @@ describe("monitoring API persistence failures", () => {
         return null;
       }
     };
-    const request = new NextRequest("http://localhost/api/monitoring?scenario=normal");
+    const request = new NextRequest("http://localhost/api/monitoring");
 
     const response = await handleMonitoringRequest(request, {
-      createDataSource: () => new MockMonitoringDataSource(),
+      createDataSource: realDataSource,
       getRepository: () => unavailableRepository
     });
 
@@ -26,7 +37,7 @@ describe("monitoring API persistence failures", () => {
   });
 
   it("preserves the normalized public response contract after persistence", async () => {
-    const source = new MockMonitoringDataSource();
+    const source = realDataSource();
     const repository: MonitoringRepository = {
       save(model) {
         return model;
@@ -35,7 +46,7 @@ describe("monitoring API persistence failures", () => {
         return null;
       }
     };
-    const request = new NextRequest("http://localhost/api/monitoring?scenario=normal");
+    const request = new NextRequest("http://localhost/api/monitoring");
     const response = await handleMonitoringRequest(request, {
       createDataSource: () => source,
       getRepository: () => repository

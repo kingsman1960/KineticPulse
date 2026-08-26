@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { mapMockScenario } from "../lib/monitoring/mockMonitoringAdapter";
+import { mapBackendMonitoringPayload } from "../lib/monitoring/backendMonitoringAdapter";
+import { normalMonitoringPayload } from "./monitoringFixture";
 
-describe("mock monitoring adapter", () => {
-  it("maps a mock payload into the normalized UI model", () => {
-    const model = mapMockScenario("normal");
+describe("Jetson monitoring adapter", () => {
+  it("maps the real wire contract into the normalized UI model", () => {
+    const model = mapBackendMonitoringPayload(normalMonitoringPayload());
 
     expect(model.subjectId).toBe("resident-001");
     expect(model.system.connection).toBe("connected");
