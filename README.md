@@ -69,26 +69,45 @@ Vision-only fall detectors suffer from high false-positive rates (a dropped obje
 
 ## System Architecture
 
-```
-+--------------------------+              +--------------------------+
-|   Wearable Wristband     |  TCP / Wi-Fi  |     Jetson Nano (Edge)   |
-|  (ESP32 + IMU + PPG HR)  | ──JSON lines▶ |                          |
-+--------------------------+              |  ┌────────────────────┐  |
-                                          |  │ CV Pose Estimation │  |
-+--------------------------+              |  ├────────────────────┤  |
-|   Webcam  ───────────────┼─────────────▶│  │ Sensor Fusion Core │  |
-|   Mic     ───────────────┼─────────────▶│  ├────────────────────┤  |
-|   Speaker ◀──────────────┼──────────────│  │ STT Voice Verifier │  |
-+--------------------------+              |  └─────────┬──────────┘  |
-                                          |            │             |
-                                          +────────────┼─────────────+
-                                                       │
-                                  ┌────────────────────┼────────────────────┐
-                                  ▼                                         ▼
-                        +-------------------+                   +----------------------+
-                        |  WebRTC Live Feed |                   |  Webhook Dispatcher  |
-                        |  → Caregiver App  |                   |  SMS / Slack / 911   |
-                        +-------------------+                   +----------------------+
+```mermaid
+flowchart LR
+    Wearable["Wearable Wristband<br/>ESP32 · IMU · PPG"]
+    Webcam["Webcam"]
+    Microphone["Microphone"]
+    Speaker["Speaker"]
+
+    subgraph Jetson["Jetson Nano — Edge Runtime"]
+        direction TB
+        Vision["CV Pose Estimation"]
+        Fusion["Sensor Fusion Core"]
+        Voice["STT Voice Verifier"]
+        Monitoring["Real-time Monitoring Publisher"]
+
+        Vision --> Fusion
+        Voice --> Fusion
+        Fusion --> Monitoring
+    end
+
+    WebRTC["WebRTC Live Feed"]
+    Dashboard["Caregiver Dashboard / App"]
+    Webhooks["Webhook Dispatcher"]
+    Emergency["SMS · Slack · Emergency APIs"]
+
+    Wearable -- "TCP / Wi-Fi<br/>JSON Lines" --> Fusion
+    Webcam -- "Video" --> Vision
+    Microphone -- "Voice response" --> Voice
+    Fusion -- "Voice prompt" --> Speaker
+    Fusion --> WebRTC --> Dashboard
+    Monitoring -- "HTTP /monitoring" --> Dashboard
+    Fusion --> Webhooks --> Emergency
+
+    classDef input fill:#e8f1ff,stroke:#2563eb,color:#172554,stroke-width:1.5px;
+    classDef edge fill:#eefcf3,stroke:#16a34a,color:#14532d,stroke-width:1.5px;
+    classDef output fill:#fff7e6,stroke:#ea580c,color:#7c2d12,stroke-width:1.5px;
+
+    class Wearable,Webcam,Microphone,Speaker input;
+    class Vision,Fusion,Voice,Monitoring edge;
+    class WebRTC,Dashboard,Webhooks,Emergency output;
 ```
 
 ### Automated Response Flow
