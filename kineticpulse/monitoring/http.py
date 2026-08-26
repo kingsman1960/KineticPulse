@@ -10,13 +10,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from typing import Any, Callable, Dict, List, Optional
 
 from kineticpulse.config import AlertsConfig
 from kineticpulse.fusion.engine import FusionSnapshot
 from kineticpulse.runtime_status import CaregiverRuntimeStatus
 from kineticpulse.utils.logging import get_logger
-from kineticpulse.utils.timing import now_ms
 
 log = get_logger(__name__)
 
@@ -47,8 +47,14 @@ def build_monitoring_payload(
     voice_status: str = "not_required",
     alert_dispatch_status: str = "idle",
     events: Optional[List[Dict[str, Any]]] = None,
+    published_at_ms: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Build the JSON envelope consumed by the Next.js real-mode adapter."""
+    wire_timestamp_ms = (
+        published_at_ms
+        if published_at_ms is not None
+        else int(time.time() * 1000)
+    )
     sensor_conn = _sensor_connection(sensors)
     event_list = list(events or [])
     if snapshot is None:
@@ -72,7 +78,7 @@ def build_monitoring_payload(
                 "detector_conf": None,
                 "action_class": None,
                 "action_conf": None,
-                "timestamp_ms": now_ms(),
+                "timestamp_ms": wire_timestamp_ms,
             },
             "voice": {"status": voice_status},
             "alert_dispatch": {"status": alert_dispatch_status},
@@ -99,7 +105,9 @@ def build_monitoring_payload(
             "detector_conf": snapshot.detector_conf,
             "action_class": snapshot.action_class,
             "action_conf": snapshot.action_conf,
-            "timestamp_ms": snapshot.timestamp_ms,
+            # Fusion timestamps are monotonic for sensor-window calculations;
+            # the dashboard contract requires Unix epoch milliseconds.
+            "timestamp_ms": wire_timestamp_ms,
         },
         "voice": {"status": voice_status},
         "alert_dispatch": {"status": alert_dispatch_status},

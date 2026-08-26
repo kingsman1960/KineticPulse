@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { mapMockScenario } from "../lib/monitoring/mockMonitoringAdapter";
+import { mapBackendMonitoringPayload } from "../lib/monitoring/backendMonitoringAdapter";
+import { disconnectedMonitoringPayload, pulseLostMonitoringPayload } from "./monitoringFixture";
 
 describe("monitoring edge states", () => {
   it("keeps a disconnected sensor distinct from pulse loss", () => {
-    const model = mapMockScenario("sensor_disconnected");
+    const model = mapBackendMonitoringPayload(disconnectedMonitoringPayload());
 
     expect(model.system.connection).toBe("degraded");
     expect(model.sensor.connection).toBe("disconnected");
@@ -14,7 +15,7 @@ describe("monitoring edge states", () => {
   });
 
   it("maps pulse loss into a critical emergency without voice verification", () => {
-    const model = mapMockScenario("pulse_lost");
+    const model = mapBackendMonitoringPayload(pulseLostMonitoringPayload());
 
     expect(model.heartRate.status).toBe("pulse_lost");
     expect(model.emergency.level).toBe("tier_2_cardiac");

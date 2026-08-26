@@ -1,9 +1,9 @@
 import type { MonitoringEvent, MonitoringModel } from "./model";
 
-export type MonitoringEventSource = "mock" | "jetson" | "unknown";
+export type MonitoringEventSource = "jetson";
 
 export interface EventPersistenceContext {
-  /** Distinguishes development mock records from Jetson/unknown records. */
+  /** Identifies the real Jetson monitoring publisher. */
   source: MonitoringEventSource;
   /** Normalized operational snapshot stored beside each emitted event. */
   model: MonitoringModel;
@@ -73,7 +73,7 @@ export class EventStoreMonitoringRepository implements MonitoringRepository {
     private readonly recentLimit = 30
   ) {}
 
-  save(model: MonitoringModel, source: MonitoringEventSource = "unknown"): MonitoringModel {
+  save(model: MonitoringModel, source: MonitoringEventSource = "jetson"): MonitoringModel {
     this.current = {
       ...model,
       recentEvents: this.eventStore.add(model.recentEvents, { source, model }).slice(0, this.recentLimit)

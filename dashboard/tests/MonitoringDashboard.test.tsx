@@ -1,19 +1,17 @@
 import { render, screen } from "@testing-library/react";
 import React from "react";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import MonitoringDashboard from "../app/components/MonitoringDashboard";
-import { mapMockScenario } from "../lib/monitoring/mockMonitoringAdapter";
+import { mapBackendMonitoringPayload } from "../lib/monitoring/backendMonitoringAdapter";
+import { normalMonitoringPayload } from "./monitoringFixture";
 
 describe("MonitoringDashboard", () => {
   it("renders the main dashboard from a normalized model", () => {
     render(
       <MonitoringDashboard
-        model={mapMockScenario("normal")}
+        model={mapBackendMonitoringPayload(normalMonitoringPayload())}
         loading={false}
         error={null}
-        scenario="normal"
-        onScenarioChange={vi.fn()}
-        showScenarioSelector
       />
     );
 
@@ -22,6 +20,5 @@ describe("MonitoringDashboard", () => {
     expect(screen.getByText("BPM")).toBeInTheDocument();
     expect(screen.getByText("ESP32 connected")).toBeInTheDocument();
     expect(screen.getByText("Recent events")).toBeInTheDocument();
-    expect(screen.getByLabelText("Development scenario selector")).toBeInTheDocument();
   });
 });

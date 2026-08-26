@@ -36,6 +36,7 @@ def test_monitoring_payload_mirrors_fusion_snapshot():
         alerts=AlertsConfig(subject_id="resident-001", location="Living room"),
         snapshot=snap,
         sensors=_FakeSensors(True),
+        published_at_ms=1_780_000_000_000,
     )
     assert payload["subject_id"] == "resident-001"
     assert payload["sensor"]["connection"] == "connected"
@@ -43,6 +44,7 @@ def test_monitoring_payload_mirrors_fusion_snapshot():
     assert payload["snapshot"]["accel"] == "quiet"
     assert payload["snapshot"]["decision"]["tier"] == "none"
     assert payload["snapshot"]["detector_class"] == "stand"
+    assert payload["snapshot"]["timestamp_ms"] == 1_780_000_000_000
     assert payload["voice"]["status"] == "not_required"
     assert payload["alert_dispatch"]["status"] == "idle"
 

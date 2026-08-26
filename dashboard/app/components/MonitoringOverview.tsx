@@ -24,10 +24,8 @@ import {
 } from "lucide-react";
 import React, { useMemo, useState, type CSSProperties, type ReactNode } from "react";
 import {
-  MONITORING_SCENARIOS,
   type MonitoringEvent,
   type MonitoringModel,
-  type MonitoringScenario,
   type MonitoringSeverity
 } from "../../lib/monitoring/model";
 
@@ -40,9 +38,6 @@ type Props = {
   heartStatusLabel: string;
   fallConfidenceLabel: string;
   emergencyLevelLabel: string;
-  scenario: MonitoringScenario;
-  onScenarioChange: (scenario: MonitoringScenario) => void;
-  showScenarioSelector: boolean;
 };
 
 const EVENT_SECTIONS: Array<{
@@ -127,10 +122,7 @@ export default function MonitoringOverview({
   tone,
   heartStatusLabel,
   fallConfidenceLabel,
-  emergencyLevelLabel,
-  scenario,
-  onScenarioChange,
-  showScenarioSelector
+  emergencyLevelLabel
 }: Props) {
   const [eventFilter, setEventFilter] = useState<EventFilter>("all");
   const counts = useMemo(
@@ -370,24 +362,6 @@ export default function MonitoringOverview({
             </div>
           </section>
 
-          {showScenarioSelector ? (
-            <section className="glass-card scenario-control redesigned" aria-label="Development scenario selector">
-              <div>
-                <span className="dev-badge">Dev only</span>
-                <label className="scenario-label" htmlFor="scenario">Scenario simulator</label>
-              </div>
-              <select
-                id="scenario"
-                aria-label="Development scenario"
-                value={scenario}
-                onChange={(event) => onScenarioChange(event.target.value as MonitoringScenario)}
-              >
-                {MONITORING_SCENARIOS.map((value) => (
-                  <option value={value} key={value}>{words(value)}</option>
-                ))}
-              </select>
-            </section>
-          ) : null}
         </aside>
       </div>
     </>

@@ -4,9 +4,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { EventPersistenceContext } from "../lib/monitoring/eventStore";
-import { mapMockScenario } from "../lib/monitoring/mockMonitoringAdapter";
+import { mapBackendMonitoringPayload } from "../lib/monitoring/backendMonitoringAdapter";
 import type { MonitoringEvent, MonitoringModel } from "../lib/monitoring/model";
 import { SQLiteEventStore } from "../lib/monitoring/sqliteEventStore";
+import { normalMonitoringPayload } from "./monitoringFixture";
 
 const tempDirectories: string[] = [];
 const openStores: SQLiteEventStore[] = [];
@@ -26,8 +27,8 @@ function createStore(
   return store;
 }
 
-function context(model: MonitoringModel = mapMockScenario("normal")): EventPersistenceContext {
-  return { source: "mock", model };
+function context(model: MonitoringModel = mapBackendMonitoringPayload(normalMonitoringPayload())): EventPersistenceContext {
+  return { source: "jetson", model };
 }
 
 function event(id: string, timestampMs: number): MonitoringEvent {
@@ -60,10 +61,10 @@ describe("SQLiteEventStore", () => {
       const indexes = db.prepare(
         "SELECT name FROM sqlite_schema WHERE type = 'index' ORDER BY name"
       ).all() as Array<{ name: string }>;
-      const migration = db.prepare("SELECT version FROM schema_migrations").get() as { version: number };
+      const migration = db.prepare("SELECT MAX(version) AS version FROM schema_migrations").get() as { version: number };
 
       expect(tables.map((row) => row.name)).toContain("monitoring_events");
-      expect(migration.version).toBe(1);
+      expect(migration.version).toBe(2);
       expect(indexes.map((row) => row.name)).toContain("idx_monitoring_events_timestamp_utc");
     } finally {
       db.close();
@@ -103,7 +104,7 @@ describe("SQLiteEventStore", () => {
         source: string;
         source_event_id: string;
       };
-      expect(row).toEqual({ id: "mock:same-source-id", source: "mock", source_event_id: "same-source-id" });
+      expect(row).toEqual({ id: "jetson:same-source-id", source: "jetson", source_event_id: "same-source-id" });
 
       expect(() => db.prepare(
         `INSERT INTO monitoring_events
@@ -113,6 +114,21 @@ describe("SQLiteEventStore", () => {
                 emergency_tier, voice_verification_status, alert_dispatch_status,
                 normalized_payload_json, created_at_utc FROM monitoring_events LIMIT 1`
       ).run()).toThrow(/UNIQUE constraint failed: monitoring_events\.source, monitoring_events\.source_event_id/);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("rejects non-Jetson event sources at the database boundary", () => {
+    const dbPath = tempDatabasePath();
+    const store = createStore(dbPath);
+    store.add([event("real-event", Date.now())], context());
+
+    const db = new Database(dbPath);
+    try {
+      expect(() => db.prepare(
+        "UPDATE monitoring_events SET source = 'mock' WHERE source_event_id = 'real-event'"
+      ).run()).toThrow(/CHECK constraint failed/);
     } finally {
       db.close();
     }

@@ -1,31 +1,21 @@
 import { mapBackendMonitoringPayload } from "./backendMonitoringAdapter";
-import { mapMockScenario } from "./mockMonitoringAdapter";
 import type { MonitoringEventSource } from "./eventStore";
 import {
-  DEFAULT_MONITORING_SCENARIO,
   type MonitoringModel,
-  type MonitoringScenario,
   type MonitoringWirePayload
 } from "./model";
 
 export interface MonitoringDataSource {
   readonly source: MonitoringEventSource;
-  read(scenario?: MonitoringScenario): Promise<MonitoringModel>;
-}
-
-export class MockMonitoringDataSource implements MonitoringDataSource {
-  readonly source = "mock" as const;
-  async read(scenario = DEFAULT_MONITORING_SCENARIO): Promise<MonitoringModel> {
-    return mapMockScenario(scenario);
-  }
+  read(): Promise<MonitoringModel>;
 }
 
 /**
  * Real HTTP adapter for Jetson `GET /monitoring`
  * (`kineticpulse.monitoring.http.MonitoringPublisher`).
  *
- * Set `MONITORING_DATA_MODE=real` and
- * `KINETICPULSE_MONITORING_HTTP_URL=http://<jetson>:8790/monitoring`.
+ * Configure `KINETICPULSE_MONITORING_HTTP_URL` when the Jetson is not on the
+ * same host as the dashboard.
  */
 export class BackendMonitoringDataSource implements MonitoringDataSource {
   readonly source = "jetson" as const;
@@ -43,14 +33,8 @@ export class BackendMonitoringDataSource implements MonitoringDataSource {
 }
 
 export function createMonitoringDataSource(): MonitoringDataSource {
-  const mode = process.env.MONITORING_DATA_MODE ?? "mock";
-  if (mode === "mock") return new MockMonitoringDataSource();
-  if (mode === "real") {
-    const endpoint = process.env.KINETICPULSE_MONITORING_HTTP_URL;
-    if (!endpoint) {
-      throw new Error("KINETICPULSE_MONITORING_HTTP_URL is required in real monitoring mode");
-    }
-    return new BackendMonitoringDataSource(endpoint);
-  }
-  throw new Error(`Unsupported MONITORING_DATA_MODE: ${mode}`);
+  const endpoint =
+    process.env.KINETICPULSE_MONITORING_HTTP_URL ??
+    "http://127.0.0.1:8790/monitoring";
+  return new BackendMonitoringDataSource(endpoint);
 }

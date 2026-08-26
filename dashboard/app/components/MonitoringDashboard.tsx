@@ -18,11 +18,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import React, { useState } from "react";
-import {
-  MONITORING_SCENARIOS,
-  type MonitoringModel,
-  type MonitoringScenario
-} from "../../lib/monitoring/model";
+import type { MonitoringModel } from "../../lib/monitoring/model";
 import MonitoringOverview from "./MonitoringOverview";
 
 // Royalty-free Pexels footage representing the monitored living-room camera view.
@@ -33,9 +29,6 @@ type Props = {
   model: MonitoringModel | null;
   loading: boolean;
   error: string | null;
-  scenario: MonitoringScenario;
-  onScenarioChange: (scenario: MonitoringScenario) => void;
-  showScenarioSelector: boolean;
 };
 
 function words(value: string): string {
@@ -77,10 +70,7 @@ function time(timestampMs: number): string {
 export default function MonitoringDashboard({
   model,
   loading,
-  error,
-  scenario,
-  onScenarioChange,
-  showScenarioSelector
+  error
 }: Props) {
   const [menuOpen, setMenuOpen] = useState(false);
   const tone = model ? stateTone(model) : "warning";
@@ -152,9 +142,6 @@ export default function MonitoringDashboard({
                   heartStatusLabel={words(model.heartRate.status)}
                   fallConfidenceLabel={percent(model.fall.confidence)}
                   emergencyLevelLabel={emergencyLabel(model.emergency.level)}
-                  scenario={scenario}
-                  onScenarioChange={onScenarioChange}
-                  showScenarioSelector={showScenarioSelector}
                 />
                 {false ? ((model: MonitoringModel) => (
                 <div className="dashboard-grid">
@@ -185,14 +172,6 @@ export default function MonitoringDashboard({
                       </div>
                     </section>
 
-                    {showScenarioSelector ? (
-                      <section className="glass-card scenario-control" aria-label="Development scenario selector">
-                        <label className="scenario-label" htmlFor="scenario">Development scenario</label>
-                        <select id="scenario" value={scenario} onChange={(event) => onScenarioChange(event.target.value as MonitoringScenario)}>
-                          {MONITORING_SCENARIOS.map((value) => <option value={value} key={value}>{words(value)}</option>)}
-                        </select>
-                      </section>
-                    ) : null}
                   </aside>
                 </div>
                 ))(model!) : null}

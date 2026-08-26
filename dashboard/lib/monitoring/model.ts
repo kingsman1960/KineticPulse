@@ -1,15 +1,3 @@
-export const MONITORING_SCENARIOS = [
-  "normal",
-  "resting",
-  "possible_fall",
-  "confirmed_fall",
-  "pulse_lost",
-  "sensor_disconnected"
-] as const;
-
-export type MonitoringScenario = (typeof MONITORING_SCENARIOS)[number];
-export const DEFAULT_MONITORING_SCENARIO: MonitoringScenario = "normal";
-
 export type EmergencyLevel =
   | "none"
   | "tier_0_dismiss"
