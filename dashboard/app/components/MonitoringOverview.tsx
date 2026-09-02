@@ -28,6 +28,7 @@ import {
   type MonitoringModel,
   type MonitoringSeverity
 } from "../../lib/monitoring/model";
+import { bpmRange, polyline, type VitalSample } from "../../lib/monitoring/sparkline";
 
 type Tone = "normal" | "warning" | "critical";
 type EventFilter = "all" | MonitoringSeverity;
@@ -38,6 +39,7 @@ type Props = {
   heartStatusLabel: string;
   fallConfidenceLabel: string;
   emergencyLevelLabel: string;
+  vitals: VitalSample[];
 };
 
 const EVENT_SECTIONS: Array<{
@@ -122,7 +124,8 @@ export default function MonitoringOverview({
   tone,
   heartStatusLabel,
   fallConfidenceLabel,
-  emergencyLevelLabel
+  emergencyLevelLabel,
+  vitals
 }: Props) {
   const [eventFilter, setEventFilter] = useState<EventFilter>("all");
   const counts = useMemo(
@@ -197,7 +200,7 @@ export default function MonitoringOverview({
             <SectionHeader
               kicker="Live signal"
               title="Vital & fall overview"
-              meta={model.heartRate.status === "unavailable" ? "Sensor unavailable" : "Current sample"}
+              meta={model.heartRate.status === "unavailable" ? "Sensor unavailable" : "Last ~3 min"}
             />
             <div className="signal-layout">
               <div
@@ -216,7 +219,7 @@ export default function MonitoringOverview({
                     <><strong>{model.heartRate.bpm}</strong><span>BPM</span></>
                   )}
                 </div>
-                <HeartRateScale bpm={model.heartRate.bpm} />
+                <HeartRateSparkline samples={vitals} bpm={model.heartRate.bpm} />
               </div>
 
               <div className="risk-visual">
@@ -405,13 +408,17 @@ function SectionHeader({ kicker, title, meta }: { kicker: string; title: string;
   );
 }
 
-function HeartRateScale({ bpm }: { bpm: number | null }) {
-  const marker = bpm === null ? 0 : Math.min(100, Math.max(0, ((bpm - 40) / 120) * 100));
-  const style = { "--heart-position": `${marker}%` } as CSSProperties;
+function HeartRateSparkline({ samples, bpm }: { samples: VitalSample[]; bpm: number | null }) {
+  const values = samples.map((s) => s.bpm);
+  const finite = values.filter((v): v is number => v != null && Number.isFinite(v));
+  const [min, max] = bpmRange(finite);
+  const points = polyline(values, 240, 64, min, max);
   return (
-    <div className={`heart-scale ${bpm === null ? "unavailable" : ""}`} style={style} aria-label={bpm === null ? "No heart-rate sample" : `Heart-rate scale showing ${bpm} BPM`}>
-      <div className="heart-scale-track"><span /></div>
-      <div className="heart-scale-labels"><span>40</span><span>100</span><span>160+</span></div>
+    <div className={`heart-spark ${bpm === null ? "unavailable" : ""}`}>
+      <svg viewBox="0 0 240 64" className="vital-sparkline" role="img" aria-label={bpm === null ? "No heart-rate sample" : `Heart-rate trend, latest ${bpm} BPM`}>
+        {points ? <polyline fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round" points={points} /> : null}
+      </svg>
+      <div className="heart-scale-labels"><span>{Math.round(min)}</span><span>BPM</span><span>{Math.round(max)}</span></div>
     </div>
   );
 }

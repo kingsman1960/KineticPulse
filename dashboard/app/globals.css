@@ -37,40 +37,8 @@ select {
   background: #f9fafb;
 }
 
-.monitoring-hero {
-  position: relative;
-  min-height: 100vh;
-  overflow: hidden;
-}
-
-.hero-video {
-  position: fixed;
-  inset: 0;
-  width: 100%;
-  height: 100vh;
-  object-fit: cover;
-  z-index: 0;
-}
-
-.hero-wash {
-  position: fixed;
-  inset: 0;
-  z-index: 1;
-  background:
-    linear-gradient(180deg, rgba(249, 250, 251, 0.9) 0%, rgba(249, 250, 251, 0.62) 34%, rgba(249, 250, 251, 0.94) 100%),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.68), transparent 60%);
-  pointer-events: none;
-}
-
-.hero-content {
-  position: relative;
-  z-index: 2;
-  min-height: 100vh;
-  display: flex;
-  flex-direction: column;
-}
-
 .topbar {
+  position: relative;
   width: min(100%, 1280px);
   margin: 0 auto;
   padding: 24px 32px;
@@ -127,9 +95,8 @@ select {
   padding: 10px;
   border: 1px solid rgba(255, 255, 255, 0.75);
   border-radius: 18px;
-  background: rgba(255, 255, 255, 0.95);
+  background: #fff;
   box-shadow: 0 18px 50px rgba(32, 42, 54, 0.12);
-  backdrop-filter: blur(18px);
 }
 
 .mobile-nav.open {
@@ -201,10 +168,9 @@ select {
 
 .live-pill {
   padding: 10px 14px;
-  background: rgba(255, 255, 255, 0.72);
+  background: #fff;
   color: #202a36;
   box-shadow: 0 10px 30px rgba(32, 42, 54, 0.08);
-  backdrop-filter: blur(14px);
 }
 
 .live-dot {
@@ -238,11 +204,10 @@ select {
 }
 
 .glass-card {
-  border: 1px solid rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(107, 114, 128, 0.12);
   border-radius: 22px;
-  background: rgba(255, 255, 255, 0.78);
-  box-shadow: 0 18px 55px rgba(32, 42, 54, 0.1);
-  backdrop-filter: blur(20px);
+  background: #fff;
+  box-shadow: 0 18px 55px rgba(32, 42, 54, 0.08);
 }
 
 .metric-card {
@@ -604,7 +569,6 @@ select {
 }
 
 .command-banner {
-  position: relative;
   min-height: 132px;
   margin-bottom: 16px;
   padding: 22px 24px;
@@ -612,39 +576,16 @@ select {
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 18px;
-  overflow: hidden;
-}
-
-.command-banner::after {
-  content: "";
-  position: absolute;
-  top: -80px;
-  right: 18%;
-  width: 220px;
-  height: 220px;
-  border-radius: 50%;
-  background: rgba(16, 185, 129, 0.08);
-  filter: blur(4px);
-  pointer-events: none;
 }
 
 .command-banner.warning {
   border-color: rgba(245, 158, 11, 0.28);
-  background: rgba(255, 251, 235, 0.9);
-}
-
-.command-banner.warning::after {
-  background: rgba(245, 158, 11, 0.1);
+  background: #fffbeb;
 }
 
 .command-banner.critical {
   border-color: rgba(239, 68, 68, 0.34);
-  background: rgba(254, 242, 242, 0.92);
-  box-shadow: 0 22px 64px rgba(185, 28, 28, 0.14);
-}
-
-.command-banner.critical::after {
-  background: rgba(239, 68, 68, 0.1);
+  background: #fef2f2;
 }
 
 .command-icon {
@@ -883,32 +824,18 @@ select {
   letter-spacing: 0.08em;
 }
 
-.heart-scale {
-  --heart-position: 0%;
+.heart-spark {
+  min-height: 72px;
 }
 
-.heart-scale-track {
-  position: relative;
-  height: 7px;
-  border-radius: 999px;
-  background: linear-gradient(90deg, #60a5fa 0%, #34d399 38%, #34d399 62%, #fb7185 100%);
+.vital-sparkline {
+  display: block;
+  width: 100%;
+  height: 72px;
+  color: #e11d48;
 }
 
-.heart-scale-track span {
-  position: absolute;
-  top: 50%;
-  left: var(--heart-position);
-  width: 14px;
-  height: 14px;
-  border: 3px solid white;
-  border-radius: 50%;
-  background: #202a36;
-  box-shadow: 0 2px 8px rgba(32, 42, 54, 0.28);
-  transform: translate(-50%, -50%);
-  transition: left 300ms ease;
-}
-
-.heart-scale.unavailable {
+.heart-spark.unavailable {
   opacity: 0.32;
 }
 
@@ -917,7 +844,8 @@ select {
   display: flex;
   justify-content: space-between;
   color: #9ca3af;
-  font-size: 0.62rem;
+  font-size: 0.68rem;
+  font-weight: 600;
 }
 
 .risk-visual {

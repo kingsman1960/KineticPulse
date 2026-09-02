@@ -38,6 +38,12 @@ from kineticpulse.fusion.tiers import EmergencyTier
 from kineticpulse.monitoring import MonitoringPublisher
 from kineticpulse.runtime_status import CaregiverRuntimeStatus
 from kineticpulse.sensors import build_sensor_client
+from kineticpulse.sensors.mock import (
+    DEMO_CLI,
+    DEMO_PLAYBOOKS,
+    MOCK_SCENARIOS,
+    demo_posture,
+)
 from kineticpulse.sensors.parser import SensorEvent
 from kineticpulse.webrtc.session_meta import build_session_meta
 from kineticpulse.temporal.stgcn import KeypointRingBuffer, TemporalHead
@@ -45,7 +51,7 @@ from kineticpulse.temporal.types import ActionLogits
 from kineticpulse.utils.logging import configure_logging, get_logger
 from kineticpulse.utils.timing import now_ms
 from kineticpulse.vision.capture import Frame, build_source
-from kineticpulse.vision.detector import Detection, FallDetector
+from kineticpulse.vision.detector import Detection, FallDetector, PostureClass
 from kineticpulse.vision.features import PoseFeatures, extract_features
 from kineticpulse.vision.pose import PoseEstimator, PoseResult
 from kineticpulse.voice.prompts import PromptPlayer
@@ -71,8 +77,13 @@ def parse_args() -> argparse.Namespace:
                         "(--mock-sensors is a clearer alias kept for the post-BLE world.)")
     p.add_argument("--mock-ble-scenario", "--mock-sensors-scenario",
                    dest="mock_ble_scenario", default="resting",
-                   choices=("resting", "fall_a_standard", "fall_b_seizure", "fall_c_syncope"),
+                   choices=MOCK_SCENARIOS,
                    help="Scenario for the mock sensor client.")
+    p.add_argument("--demo", metavar="PLAYBOOK", default=None, choices=tuple(DEMO_CLI),
+                   help="Safe dashboard playbook (implies --mock-ble --mock-stt --no-camera). "
+                        "One of: " + ", ".join(DEMO_CLI) + ".")
+    p.add_argument("--demo-syncope-seizure", action="store_true",
+                   help="Alias for --demo syncope-seizure.")
     p.add_argument("--mock-stt", action="store_true",
                    help="Use a canned STT response instead of a real microphone.")
     p.add_argument("--mock-stt-response", default="",
@@ -81,12 +92,56 @@ def parse_args() -> argparse.Namespace:
                    help="Skip camera + detector (telemetry-only smoke test).")
     p.add_argument("--max-runtime-s", type=float, default=None,
                    help="Stop the orchestrator after this many seconds (smoke-test / CI).")
-    return p.parse_args()
+    args = p.parse_args()
+    if args.demo_syncope_seizure and args.demo is None:
+        args.demo = "syncope-seizure"
+    if args.demo:
+        args.mock_ble = True
+        args.mock_stt = True
+        args.no_camera = True
+        args.mock_ble_scenario = DEMO_CLI[args.demo]
+    return args
 
 
 # --------------------------------------------------------------------------- #
 # Vision worker
 # --------------------------------------------------------------------------- #
+
+
+_POSTURE = {
+    "stand": PostureClass.STAND,
+    "sitting": PostureClass.SITTING,
+    "falling": PostureClass.FALLING,
+    "fallen": PostureClass.FALLEN,
+}
+
+
+async def _script_demo_posture(
+    detections_q: "asyncio.Queue[Detection]",
+    stop: asyncio.Event,
+    scenario: str,
+) -> None:
+    """Script detector class from the playbook — no camera, no real person."""
+    log.info("Demo vision: scenario=%s", scenario)
+    t0 = now_ms()
+    while not stop.is_set():
+        label = demo_posture(scenario, (now_ms() - t0) / 1000.0)
+        fallen = label == "fallen"
+        det = Detection(
+            bbox_xyxy=(140.0, 220.0, 520.0, 680.0),
+            cls=_POSTURE.get(label, PostureClass.STAND),
+            confidence=0.91 if fallen else 0.88,
+            timestamp_ms=now_ms(),
+        )
+        try:
+            detections_q.put_nowait(det)
+        except asyncio.QueueFull:
+            try:
+                detections_q.get_nowait()
+            except asyncio.QueueEmpty:
+                pass
+            detections_q.put_nowait(det)
+        await asyncio.sleep(0.2)
 
 
 async def _vision_worker(
@@ -98,10 +153,14 @@ async def _vision_worker(
     actions_q: "asyncio.Queue[ActionLogits]",
     stop: asyncio.Event,
     no_camera: bool,
+    scenario: str = "resting",
 ) -> None:
     if no_camera:
-        log.info("--no-camera set; skipping capture loop.")
-        await stop.wait()
+        if scenario in DEMO_PLAYBOOKS:
+            await _script_demo_posture(detections_q, stop, scenario)
+        else:
+            log.info("--no-camera set; skipping capture loop.")
+            await stop.wait()
         return
 
     source = build_source(cfg.camera)
@@ -210,6 +269,7 @@ async def _dispatch_worker(
 
     cooldown_ms = 8_000           # do not retrigger Tier 1 within this window
     last_tier_at_ms = 0
+    last_dispatched_tier = None
 
     async def _dispatch_alert(payload) -> str:
         runtime_status.set_alert("pending")
@@ -276,8 +336,11 @@ async def _dispatch_worker(
             tier = snap.decision.tier
             if tier == EmergencyTier.NONE or tier == EmergencyTier.TIER_0_DISMISS:
                 continue
-            if snap.timestamp_ms - last_tier_at_ms < cooldown_ms:
+            if tier == last_dispatched_tier:
                 continue
+            if not tier.bypasses_voice and last_dispatched_tier is not None and snap.timestamp_ms - last_tier_at_ms < cooldown_ms:
+                continue
+            last_dispatched_tier = tier
             last_tier_at_ms = snap.timestamp_ms
 
             log.warning("Emergency tier=%s scenario=%s reason=%s",
@@ -337,6 +400,7 @@ async def _dispatch_worker(
                     detail=critical.decision.reason,
                     timestamp_ms=critical.timestamp_ms,
                 )
+                last_dispatched_tier = critical.decision.tier
                 last_tier_at_ms = critical.timestamp_ms
                 await _escalate(critical)
                 continue
@@ -391,6 +455,10 @@ async def run(args: argparse.Namespace) -> int:
     configure_logging(level=cfg.logging.level, json_format=cfg.logging.json)
     log.info("KineticPulse starting (config=%s, mock_ble=%s, mock_stt=%s, no_camera=%s)",
              args.config, args.mock_ble, args.mock_stt, args.no_camera)
+
+    if args.mock_ble_scenario in DEMO_PLAYBOOKS and not cfg.wristband.has_accelerometer:
+        log.warning("Demo needs IMU samples; forcing wristband.has_accelerometer=true")
+        cfg.wristband.has_accelerometer = True
 
     detections_q: "asyncio.Queue[Detection]" = asyncio.Queue(maxsize=8)
     features_q: "asyncio.Queue[PoseFeatures]" = asyncio.Queue(maxsize=8)
@@ -457,7 +525,8 @@ async def run(args: argparse.Namespace) -> int:
         asyncio.create_task(sensors.run(), name="sensors"),
         asyncio.create_task(fusion.run(), name="fusion"),
         asyncio.create_task(_vision_worker(
-            cfg, detector, pose, detections_q, features_q, actions_q, stop, args.no_camera,
+            cfg, detector, pose, detections_q, features_q, actions_q, stop,
+            args.no_camera, args.mock_ble_scenario,
         ), name="vision"),
         asyncio.create_task(
             _dispatch_worker(cfg, snapshots_q, args, stop, runtime_status),

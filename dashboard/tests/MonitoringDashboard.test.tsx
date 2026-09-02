@@ -17,7 +17,8 @@ describe("MonitoringDashboard", () => {
 
     expect(screen.getByRole("heading", { name: /always aware/i })).toBeInTheDocument();
     expect(screen.getByText("72")).toBeInTheDocument();
-    expect(screen.getByText("BPM")).toBeInTheDocument();
+    expect(screen.getAllByText("BPM").length).toBeGreaterThan(0);
+    expect(screen.getByRole("img", { name: /heart-rate trend/i })).toBeInTheDocument();
     expect(screen.getByText("ESP32 connected")).toBeInTheDocument();
     expect(screen.getByText("Recent events")).toBeInTheDocument();
   });

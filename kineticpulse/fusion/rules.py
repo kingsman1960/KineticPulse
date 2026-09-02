@@ -195,7 +195,12 @@ def accel_signature(
             return AccelSignature.SOFT_COLLAPSE
         return AccelSignature.QUIET
 
-    impact_idx = max(range(len(window)), key=lambda i: window[i].magnitude_g)
+    # First impact in the window, not the latest peak: a later jolt must not
+    # reset the tremor clock (seizure is rhythmic after the first hit).
+    impact_idx = next(
+        i for i, s in enumerate(window)
+        if s.magnitude_g >= thresholds.impact_g_threshold
+    )
     tail = window[impact_idx + 1:]
     if not tail:
         return AccelSignature.IMPACT_ONLY
@@ -258,7 +263,8 @@ def aggregate_hr(
         if isinstance(ev, HrSample):
             if latest is None or ev.timestamp_ms > latest.timestamp_ms:
                 latest = ev
-        elif isinstance(ev, PulseLost):
+    for ev in samples:
+        if isinstance(ev, PulseLost) and (latest is None or ev.timestamp_ms >= latest.timestamp_ms):
             pulse_lost_total += ev.duration_s
     if latest is None:
         return HrAggregate(latest_bpm=None, pulse_lost_s=pulse_lost_total)
