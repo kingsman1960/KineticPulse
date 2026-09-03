@@ -12,6 +12,10 @@ Sources:
     Primary    : dataset/fall detection.v1i.yolov8        (train + valid + test, CC BY 4.0)
     Secondary 1: dataset/Fall Detection.yolov8            (train only)
     Secondary 2: dataset/fallen detection.yolov8          (train only)
+    Secondary 3: dataset/kaggle fall detection            (train only, via
+                 scripts/prepare_kaggle_fall.py - second `sitting` source)
+    Secondary 4: dataset/le2i fall detection              (train only, via
+                 scripts/prepare_le2i.py - mid-fall `falling` frames)
 
 Remap policy (decided in chat with rationale documented in dataset/README.md):
 
@@ -110,18 +114,37 @@ REMAPS: Dict[str, Dict[int, Optional[str]]] = {
         2: "sitting",   # promoted from DROP - sitting is a first-class posture
         3: "stand",
     },
+    # Second `sitting` source. `Walking` maps to stand, and `Fall Detected` is
+    # kept rather than dropped: these images mix classes, and dropping one box
+    # would leave a labelled person as unlabelled background.
+    "kaggle fall detection": {
+        0: "fallen",    # Fall Detected
+        1: "stand",     # Walking
+        2: "sitting",
+    },
+    # scripts/prepare_le2i.py already writes unified indices, so this is identity.
+    # Its reason for existing is mid-fall frames - the `falling` recall gap.
+    "le2i fall detection": {
+        0: "fallen",
+        1: "falling",
+        2: "stand",
+    },
 }
 
 DATASET_TAGS: Dict[str, str] = {
     "fall detection.v1i.yolov8": "p1",
     "Fall Detection.yolov8":     "s1",
     "fallen detection.yolov8":   "s2",
+    "kaggle fall detection":     "s3",
+    "le2i fall detection":       "s4",
 }
 
 DATASETS: List[Tuple[str, str]] = [
     ("fall detection.v1i.yolov8", "primary"),
     ("Fall Detection.yolov8",     "secondary"),
     ("fallen detection.yolov8",   "secondary"),
+    ("kaggle fall detection",     "secondary"),
+    ("le2i fall detection",       "secondary"),
 ]
 
 FALL_DOWN_DATASET = "fallen detection.yolov8"

@@ -41,7 +41,7 @@ deterministic: true
 
 # --- Output ---
 project: runs/detect              # parent folder
-name: kp_v2_4cls                  # run name (best weights: runs/detect/kp_v2_4cls/weights/best.pt)
+name: kp_v3_4cls                  # run name (best weights: runs/detect/kp_v3_4cls/weights/best.pt)
 exist_ok: false                   # set true to overwrite an existing run
 save: true
 save_period: -1                   # -1 = only save last + best
