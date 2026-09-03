@@ -62,6 +62,18 @@ def test_falling_takes_priority_for_safety():
     assert rule == "falling-rescue"
 
 
+def test_chair_sitter_is_not_falling_rescue():
+    # v2 on Kaggle chairs: falling ~0.55, sitting ~0.50. The old rule
+    # treated sitting as an "other" falling was allowed to trail by 0.10,
+    # so a seated person became a mid-fall. Sitting must win that tie.
+    cls, _, rule = choose_class(
+        _scores(fallen=0.05, falling=0.55, stand=0.12, sitting=0.50),
+        PriorityConfig(),
+    )
+    assert cls == IDX_SITTING
+    assert rule == "sitting-rescue"
+
+
 def test_stand_remains_when_only_stand_is_active():
     # Quiet stand frame; nothing else is loud enough to win a rescue.
     cls, _, rule = choose_class(

@@ -226,6 +226,30 @@ def test_sitting_with_stable_vitals_is_dismissed() -> None:
     assert decision.scenario == "D"
 
 
+def test_still_upright_falling_label_is_a_sitter() -> None:
+    """v2 classifies chair-sitting as falling. Pose features say still
+    and upright, so fusion must not escalate that into a mid-fall."""
+    pose = pose_signature(
+        detector_class="falling",
+        torso_angle_deg=20.0,
+        aspect_ratio=0.7,
+        centroid_vel_pps=0.1,
+        stillness=0.95,
+    )
+    assert pose == PoseSignature.UPRIGHT
+
+
+def test_tilted_moving_falling_label_stays_falling() -> None:
+    pose = pose_signature(
+        detector_class="falling",
+        torso_angle_deg=70.0,
+        aspect_ratio=1.5,
+        centroid_vel_pps=1.5,
+        stillness=0.1,
+    )
+    assert pose == PoseSignature.FALLING
+
+
 def test_sudden_seated_collapse_with_bradycardia_triggers_cardiac() -> None:
     """Subject was standing then dropped into a seated posture with a sharp
     torso tilt. Combined with bradycardia from the wristband this is the

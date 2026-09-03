@@ -26,8 +26,8 @@ class CameraConfig:
 @dataclass
 class DetectorConfig:
     # Default points at the 4-class checkpoint produced by scripts/train.py
-    # with configs/train.yaml (name: kp_v2_4cls). Accepts .pt / .onnx / .engine
-    # transparently via Ultralytics.
+    # with configs/train.yaml. Accepts .pt / .onnx / .engine transparently
+    # via Ultralytics. Current ship: v2 fine-tuned with Kaggle sitting (no Le2i).
     weights: str = "runs/detect/kp_v2_4cls/weights/best.pt"
     conf: float = 0.5
     iou: float = 0.45

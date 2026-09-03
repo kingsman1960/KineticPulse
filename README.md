@@ -339,18 +339,18 @@ python scripts/train.py
 python scripts/train.py --model yolov8n.pt --epochs 50 --batch 8
 ```
 
-Best weights end up at `runs/detect/kp_v2_4cls/weights/best.pt` (the run name is configurable via `configs/train.yaml::name`).
+Best weights end up at `runs/detect/kp_v2_4cls/weights/best.pt` (the run name is configurable via `configs/train.yaml::name`). That path is the Jetson ship slot (`deploy/jetson/install.sh` checks it).
 
-**Reference checkpoint metrics** (Ultralytics 8.4.53, YOLOv8s, 35 epochs with early stopping at epoch 15; `runs/detect/kp_v2_4cls/weights/best.pt`):
+**Reference checkpoint metrics** (Ultralytics 8.4.53, YOLOv8s; `runs/detect/kp_v2_4cls/weights/best.pt` — v2 fine-tuned 30 epochs on Primary + secondaries 1–2 + Kaggle sitting, Le2i held out):
 
 | Split | Images | Instances | overall mAP50 | overall mAP50-95 | per-class mAP50 (`fallen` / `falling` / `stand`) | Notes |
 |---|---:|---:|---:|---:|---|---|
-| `val`  | 266 | 296 | **0.885** | 0.556 | 0.900 / 0.835 / 0.921 | balanced (`falling`=100, `stand`=148, `fallen`=48). **Honest baseline.** |
+| `val`  | 266 | 296 | **0.893** | 0.567 | 0.876 / 0.879 / 0.925 | `falling` recall **0.72** (was 0.69). Honest baseline. |
 | `test` | 100 | 101 | 0.977 | 0.610 | 0.995 / 0.995 / 0.942 | skewed (`falling`=7, `stand`=93, `fallen`=1) — inflated by class imbalance |
 
 `val` is the number to quote externally; `test` is inflated because the held-out test split happens to be ~92% `stand` instances and only 7 `falling` instances. Expect a real-world mAP50 of roughly **0.85 – 0.90** once the deployment domain is included. (Re-measure any time with `python scripts/eval.py --weights runs/detect/kp_v2_4cls/weights/best.pt --split val`.)
 
-Neither split contains `sitting` instances (the Primary dataset has no `sitting` labels). The class is trained but only verifiable via the live-camera spot check below — and **the TSSTG temporal head fully covers `sitting` regardless** (live test: `stand` conf 0.85–0.93, `sitting` 0.55–0.82, `fallen` 0.49 on a top-down laptop webcam where the per-frame YOLO detector struggles).
+Neither split contains `sitting` ground truth (Primary has no `sitting` labels). Chair-sitting was measured on a Kaggle probe the previous checkpoint had never seen: **0% → 95%** sitting at conf 0.40, with the old false-`falling` on those frames gone. Fusion still treats sitting as UPRIGHT unless the pose features show a seated collapse.
 
 ### 4. Evaluate on the held-out test split
 
@@ -604,7 +604,7 @@ KineticPulse/
 - [x] Two-stream ST-GCN action classifier (TSSTG) integrated + weights in place (community-mirrored `tsstg-model.pth`); live spot-check via `scripts/live_predict.py --use-action-classifier` works
 - [x] `ActionLogits` wired into the fusion engine — `pose_signature()` now consumes the temporal head, EMA + hysteresis published as `stable_label`, fusion snapshots carry `action_class` / `action_conf`, alert payload exposes them downstream (see MANUAL §8.4)
 - [x] TSSTG fine-tuning toolchain — `scripts/live_predict.py --record` (live labelling), `scripts/extract_keypoints.py` (video → `.npz` clips), `scripts/train_temporal.py` (BCE fine-tune over the upstream 7-class head with optional `--freeze-backbone`); collection of deployment-domain clips and the actual fine-tune run are still TODO.
-- [ ] Optional: detector → `falling` recall pass — current val recall on `falling` is 0.69; expanding the dataset with mid-fall transition frames is the lowest-hanging fruit on the per-frame side
+- [ ] Optional: detector → `falling` recall pass — current val recall on `falling` is 0.72; more same-domain mid-fall frames are still the lowest-hanging fruit on the per-frame side
 - [x] WebRTC peer + caregiver dashboard baseline (aiortc Jetson peer, authenticated signaling server, Next.js session viewer, TURN-ready config + rollout checklist)
 - [x] Jetson edge deploy package (`install.sh`, `deploy/jetson/`, `kineticpulse` launcher, `requirements-jetson-runtime.txt`)
 - [x] One-shot Jetson bootstrap (`bootstrap.sh` — runtime + signaling + Tailscale + systemd + deploy secrets)

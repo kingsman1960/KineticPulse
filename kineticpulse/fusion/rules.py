@@ -102,6 +102,16 @@ def pose_signature(
             return PoseSignature.FALSE_POSITIVE
         return PoseSignature.PRONE
     if cls == "falling":
+        # v2 labels a still chair-sitter as falling. Same override as
+        # fallen→UPRIGHT: upright + tall box + not actually moving.
+        # Missing pose features keep FALLING (demos / first frames).
+        upright = torso_angle_deg is not None and torso_angle_deg < 35
+        tall = aspect_ratio is None or aspect_ratio < 1.0
+        slow = still or (
+            centroid_vel_pps is not None and abs(centroid_vel_pps) < _FALL_VEL_BLS
+        )
+        if upright and tall and slow:
+            return PoseSignature.UPRIGHT
         return PoseSignature.FALLING
     if cls == "stand":
         if (centroid_vel_pps is not None and centroid_vel_pps > _FALL_VEL_BLS

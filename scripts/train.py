@@ -59,6 +59,7 @@ def parse_args() -> argparse.Namespace:
                    help='Device override: "cpu", "0", "0,1", or "" for auto.')
     p.add_argument("--name", type=str, default=None, help="Run name.")
     p.add_argument("--project", type=str, default=None, help="Output parent dir.")
+    p.add_argument("--lr0", type=float, default=None, help="Initial LR override.")
     p.add_argument("--resume", action="store_true",
                    help="Resume the latest run with the same name.")
     return p.parse_args()
@@ -74,6 +75,7 @@ def merge_overrides(cfg: Dict[str, Any], args: argparse.Namespace) -> Dict[str, 
         "device": args.device,
         "name": args.name,
         "project": args.project,
+        "lr0": args.lr0,
     }
     for k, v in overrides.items():
         if v is not None:

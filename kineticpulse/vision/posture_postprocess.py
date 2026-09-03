@@ -82,10 +82,12 @@ class PriorityConfig:
     iou_group: float = DEFAULT_IOU_GROUP
     output_min_conf: float = DEFAULT_OUTPUT_MIN_CONF
 
-    # ``falling`` is safety-critical: bias towards reporting it as long
-    # as it is meaningfully active and not dwarfed by something else.
+    # ``falling`` is safety-critical, but v2 maps chair-sitting to falling
+    # with sitting≈0. Require falling to beat sitting the same way fallen
+    # already has to, or a seated person becomes a false mid-fall.
     falling_min: float = 0.40
-    falling_vs_others_margin: float = 0.10  # falling >= max(others) - margin
+    falling_vs_others_margin: float = 0.10  # falling >= max(fallen, stand) - margin
+    falling_vs_sitting_margin: float = 0.10  # falling > sitting + margin
 
     # ``fallen`` is also safety-critical, but we must avoid mistaking
     # an upright sitting subject for a fallen one. Require ``fallen`` to
@@ -182,9 +184,10 @@ def choose_class(per_class_max: Dict[int, float],
     sta = per_class_max.get(IDX_STAND, 0.0)
     sit = per_class_max.get(IDX_SITTING, 0.0)
 
-    others_for_falling = max(fln, sta, sit)
+    others_for_falling = max(fln, sta)
     if (fall >= cfg.falling_min
-            and fall >= others_for_falling - cfg.falling_vs_others_margin):
+            and fall >= others_for_falling - cfg.falling_vs_others_margin
+            and fall > sit + cfg.falling_vs_sitting_margin):
         return IDX_FALLING, fall, "falling-rescue"
 
     if (fln >= cfg.fallen_min
